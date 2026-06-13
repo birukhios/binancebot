@@ -1,0 +1,1 @@
+REVOKE EXECUTE ON FUNCTION public.provision_new_user() FROM PUBLIC, anon, authenticated;
