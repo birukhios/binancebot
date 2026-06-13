@@ -24,9 +24,17 @@ import { botLog } from "@/lib/bot/log.server";
 
 const FUTURES_TAKER_FEE_RATE = 0.0004;
 const FUTURES_MAKER_FEE_RATE = 0.0002;
+const VPNHOOD_REPO_URL = "https://github.com/vpnhood/vpnhood";
 
 function hasSupabaseAdminEnv() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function binanceNetworkRouteStatus() {
+  return {
+    proxyConfigured: Boolean(process.env.BINANCE_PROXY_URL?.trim()),
+    vpnhoodRepoUrl: VPNHOOD_REPO_URL,
+  };
 }
 
 async function localDashboardFallback(userId: string) {
@@ -196,6 +204,7 @@ async function localDashboardFallback(userId: string) {
     credsStatus,
     trendBias,
     marketSession,
+    binanceNetworkRoute: binanceNetworkRouteStatus(),
   };
 }
 
@@ -416,7 +425,19 @@ export const getDashboard = createServerFn({ method: "GET" })
     );
     const realizedToday = realizedTodayBinance ?? realizedTodayDb;
 
-    return { cfg, symbols, account, positions, openOrders, error, realizedToday, credsStatus, trendBias, marketSession };
+    return {
+      cfg,
+      symbols,
+      account,
+      positions,
+      openOrders,
+      error,
+      realizedToday,
+      credsStatus,
+      trendBias,
+      marketSession,
+      binanceNetworkRoute: binanceNetworkRouteStatus(),
+    };
   });
 
 export const getTrades = createServerFn({ method: "GET" })

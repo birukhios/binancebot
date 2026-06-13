@@ -728,6 +728,10 @@ function Dashboard() {
                     invalidate();
                   }}
                 />
+                <BinanceNetworkRouteCard
+                  proxyConfigured={!!dash.data?.binanceNetworkRoute?.proxyConfigured}
+                  vpnhoodRepoUrl={dash.data?.binanceNetworkRoute?.vpnhoodRepoUrl}
+                />
                 <div className="rounded-md border border-muted bg-muted/30 p-4 text-xs text-muted-foreground">
                   Your keys are stored on the server and are only used when this bot runs. They are never sent back to the browser.
                 </div>
@@ -1210,6 +1214,43 @@ function BinanceKeysCard({
           }}
         >
           {saving ? "Saving…" : "Save API keys"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BinanceNetworkRouteCard({
+  proxyConfigured,
+  vpnhoodRepoUrl = "https://github.com/vpnhood/vpnhood",
+}: {
+  proxyConfigured: boolean;
+  vpnhoodRepoUrl?: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Binance network route</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>VPN/proxy status</Label>
+            <p className="text-xs text-muted-foreground">
+              Use this when Binance is blocked by the local provider. The bot reads <code>BINANCE_PROXY_URL</code> from the server environment.
+            </p>
+          </div>
+          <Badge variant={proxyConfigured ? "default" : "secondary"}>
+            {proxyConfigured ? "Proxy set" : "No proxy"}
+          </Badge>
+        </div>
+        <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+          VpnHood is a self-host VPN project, not a browser package. Run the VpnHood client on the machine hosting this bot, or expose a proxy route and set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>.
+        </div>
+        <Button variant="outline" size="sm" asChild>
+          <a href={vpnhoodRepoUrl} target="_blank" rel="noreferrer">
+            Open VpnHood GitHub
+          </a>
         </Button>
       </CardContent>
     </Card>
