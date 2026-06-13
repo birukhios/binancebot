@@ -6,7 +6,8 @@ import { localBinanceCredsForUser } from "@/lib/binance/local-creds.server";
 
 const MAINNET = "https://fapi.binance.com";
 const TESTNET = "https://testnet.binancefuture.com";
-const BINANCE_TIMEOUT_MS = 7_000;
+const BINANCE_READ_TIMEOUT_MS = 2_500;
+const BINANCE_WRITE_TIMEOUT_MS = 7_000;
 let proxyAgentCache: { url: string; agent: ProxyAgent } | null = null;
 
 // Original owner can still fall back to the env-stored keys.
@@ -169,7 +170,7 @@ async function serverTimestamp(creds: BinanceCreds, forceRefresh = false) {
   try {
     const res = await binanceFetch(`${host}/fapi/v1/time`, {
       headers: { "user-agent": "crypto-caddie-demo/1.0" },
-      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(BINANCE_READ_TIMEOUT_MS),
     });
     const json = (await res.json()) as { serverTime?: number };
     if (res.ok && Number.isFinite(json.serverTime)) {
@@ -214,6 +215,7 @@ async function bybitJson<T>(path: string, params: Record<string, string | number
   const query = qs(params);
   const res = await fetch(`https://api.bybit.com${path}${query ? `?${query}` : ""}`, {
     headers: { "user-agent": "crypto-caddie-demo/1.0" },
+    signal: AbortSignal.timeout(BINANCE_READ_TIMEOUT_MS),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Bybit ${path} ${res.status}: ${text.slice(0, 160)}`);
@@ -229,7 +231,7 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
     const url = `${MAINNET}${path}${Object.keys(params).length ? "?" + qs(params) : ""}`;
     const res = await binanceFetch(url, {
       headers: { "user-agent": "crypto-caddie-demo/1.0" },
-      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(BINANCE_READ_TIMEOUT_MS),
     });
     const text = await res.text();
     if (res.ok) return JSON.parse(text) as T;
@@ -317,7 +319,7 @@ async function publicReq<T>(creds: BinanceCreds, path: string, params: Record<st
   try {
     res = await binanceFetch(url, {
       headers: { "user-agent": "crypto-caddie-demo/1.0" },
-      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(BINANCE_READ_TIMEOUT_MS),
     });
   } catch (e) {
     const error = transientBinanceError(creds, "GET", path, e);
@@ -353,7 +355,7 @@ async function signedReq<T>(
       res = await binanceFetch(url, {
         method,
         headers: { "X-MBX-APIKEY": creds.apiKey, "user-agent": "crypto-caddie-demo/1.0" },
-        signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(method === "GET" ? BINANCE_READ_TIMEOUT_MS : BINANCE_WRITE_TIMEOUT_MS),
       });
     } catch (e) {
       throw transientBinanceError(creds, method, path, e);

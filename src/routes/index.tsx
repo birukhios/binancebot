@@ -258,11 +258,16 @@ function Dashboard() {
         )}
 
         {dash.data?.error && (
-          <Card className="border-destructive">
+          <Card className="border-orange-500/60 bg-orange-500/10">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">
-                Binance API error: {dash.data.error}
+              <p className="text-sm">
+                <strong>Binance network blocked:</strong> {dash.data.error}
               </p>
+              {!dash.data?.binanceNetworkRoute?.proxyConfigured && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Connect Cloudflare WARP/VpnHood on this machine, or set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>, then restart the server.
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -1245,7 +1250,7 @@ function BinanceNetworkRouteCard({
           </Badge>
         </div>
         <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-          VpnHood is a self-host VPN project, not a browser package. Run the VpnHood client on the machine hosting this bot, or expose a proxy route and set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>.
+          For a free VPN route, Cloudflare WARP is the safest first option on macOS. Install the Cloudflare WARP app, turn WARP on, then restart this server. VpnHood is self-hosted; run its client on this machine, or expose a proxy route and set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>.
         </div>
         <Button variant="outline" size="sm" asChild>
           <a href={vpnhoodRepoUrl} target="_blank" rel="noreferrer">

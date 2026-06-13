@@ -14,6 +14,12 @@ It is a full VPN server/client stack, mostly built in .NET/C#. It is not a Node 
 
 Use one of these setups:
 
+0. Free easiest route on macOS: Cloudflare WARP.
+   - Install Cloudflare WARP for macOS from Cloudflare's official download page.
+   - Turn WARP on from the menu bar.
+   - Restart this bot server.
+   - This changes the machine's network route, so `BINANCE_PROXY_URL` can stay empty.
+
 1. Run the VpnHood client on the same machine or VPS that runs this bot.
    - If the VPN changes the host network route, no app setting is needed.
    - Restart the bot server after connecting the VPN.
