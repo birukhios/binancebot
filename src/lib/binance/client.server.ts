@@ -415,6 +415,16 @@ export function isBinanceNetworkBlock(error: unknown) {
   );
 }
 
+function isTransientBinanceNetworkError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("temporarily unreachable") ||
+    message.includes("fetch failed") ||
+    message.includes("Connection reset") ||
+    message.includes("aborted")
+  );
+}
+
 async function fallbackPositionRiskFromAccount(creds: BinanceCreds, symbol?: string) {
   const acct = await signedReq<AccountInfo>(creds, "GET", "/fapi/v2/account");
   const marks = await publicReq<Array<{ symbol: string; markPrice: string }>>(creds, "/fapi/v1/premiumIndex").catch(() => []);
@@ -449,6 +459,7 @@ export const binance = {
     try {
       return await signedReq<any[]>(c, "GET", "/fapi/v2/positionRisk", symbol ? { symbol } : {});
     } catch (e) {
+      if (c.testnet && isTransientBinanceNetworkError(e)) return [];
       if (c.testnet && isBinanceNetworkBlock(e)) {
         try {
           return await fallbackPositionRiskFromAccount(c, symbol);
