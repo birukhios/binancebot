@@ -4,6 +4,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import {
   binance,
+  binanceProxySource,
   formatBinanceError,
   getCredsForUser,
   isBinanceNetworkBlock,
@@ -19,20 +20,45 @@ import {
   updateLocalBotConfig,
   updateLocalSymbol,
 } from "@/lib/bot/local-bot-store.server";
-import { ensureLocalBotRunner, runLocalBotTick, stopLocalBotRunner } from "@/lib/bot/local-runner.server";
+import {
+  ensureLocalBotRunner,
+  runLocalBotTick,
+  stopLocalBotRunner,
+} from "@/lib/bot/local-runner.server";
 import { botLog } from "@/lib/bot/log.server";
 
 const FUTURES_TAKER_FEE_RATE = 0.0004;
 const FUTURES_MAKER_FEE_RATE = 0.0002;
 const VPNHOOD_REPO_URL = "https://github.com/vpnhood/vpnhood";
+let publicIpCache: { ip: string | null; expiresAt: number } | null = null;
 
 function hasSupabaseAdminEnv() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-function binanceNetworkRouteStatus() {
+async function serverPublicIp() {
+  if (publicIpCache && publicIpCache.expiresAt > Date.now()) return publicIpCache.ip;
+  try {
+    const res = await fetch("https://api.ipify.org?format=json", {
+      signal: AbortSignal.timeout(2_000),
+      headers: { "user-agent": "crypto-caddie-demo/1.0" },
+    });
+    const json = (await res.json()) as { ip?: string };
+    const ip = typeof json.ip === "string" && json.ip.trim() ? json.ip.trim() : null;
+    publicIpCache = { ip, expiresAt: Date.now() + 60_000 };
+    return ip;
+  } catch {
+    publicIpCache = { ip: null, expiresAt: Date.now() + 30_000 };
+    return null;
+  }
+}
+
+async function binanceNetworkRouteStatus() {
+  const proxySource = binanceProxySource();
   return {
-    proxyConfigured: Boolean(process.env.BINANCE_PROXY_URL?.trim()),
+    proxyConfigured: Boolean(proxySource),
+    proxySource,
+    serverPublicIp: await serverPublicIp(),
     vpnhoodRepoUrl: VPNHOOD_REPO_URL,
   };
 }
@@ -122,7 +148,8 @@ async function localDashboardFallback(userId: string) {
           const entry = parseFloat(p.entryPrice) || 0;
           const premiumMark = parseFloat(premiumBySym.get(p.symbol)?.markPrice ?? "0") || 0;
           const mark = premiumMark > 0 ? premiumMark : parseFloat(p.markPrice) || 0;
-          const upnl = entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
+          const upnl =
+            entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
           const notional = Math.abs(amt * mark) || Math.abs(parseFloat(p.notional ?? "0")) || 0;
           const estCloseFeeUsdt = notional * FUTURES_TAKER_FEE_RATE;
           const estRoundTripFeeUsdt = notional * (FUTURES_TAKER_FEE_RATE + FUTURES_MAKER_FEE_RATE);
@@ -130,7 +157,8 @@ async function localDashboardFallback(userId: string) {
           const leverage = parseFloat(p.leverage) || 1;
           const initialMargin = leverage > 0 ? notional / leverage : 0;
           const roiPct = initialMargin > 0 ? (upnl / initialMargin) * 100 : 0;
-          const netRoiPct = initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
+          const netRoiPct =
+            initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
           const acctPos = acctByKey.get(`${p.symbol}:${p.positionSide}`);
           const maintMargin = parseFloat(acctPos?.maintMargin ?? "0") || 0;
           const isolated = p.marginType === "isolated";
@@ -145,7 +173,7 @@ async function localDashboardFallback(userId: string) {
           const tpTargetUsdt = notional * (spacingPct / 100);
           const tpTargetPrice =
             spacingPct > 0 && entry > 0
-              ? entry * (1 + (amt >= 0 ? 1 : -1) * spacingPct / 100)
+              ? entry * (1 + ((amt >= 0 ? 1 : -1) * spacingPct) / 100)
               : null;
           return {
             symbol: p.symbol,
@@ -204,7 +232,7 @@ async function localDashboardFallback(userId: string) {
     credsStatus,
     trendBias,
     marketSession,
-    binanceNetworkRoute: binanceNetworkRouteStatus(),
+    binanceNetworkRoute: await binanceNetworkRouteStatus(),
   };
 }
 
@@ -212,7 +240,9 @@ async function loadCreds(userId: string): Promise<{ creds: BinanceCreds; testnet
   if (!hasSupabaseAdminEnv()) {
     const testnet = Boolean(getLocalBotState(userId).cfg.testnet ?? true);
     if (!testnet) {
-      throw new Error("Local shared mode only supports Binance Futures TESTNET. Switch Testnet mode back on to trade from this link.");
+      throw new Error(
+        "Local shared mode only supports Binance Futures TESTNET. Switch Testnet mode back on to trade from this link.",
+      );
     }
     const creds = await getCredsForUser(userId, testnet);
     return { creds, testnet };
@@ -262,7 +292,12 @@ export const getDashboard = createServerFn({ method: "GET" })
     // Owner can also fall back to env-stored keys — probe getCredsForUser so
     // the UI doesn't show "Set up required" when env keys are present.
     const hasEnvCreds = async (tn: boolean) => {
-      try { await getCredsForUser(userId, tn); return true; } catch { return false; }
+      try {
+        await getCredsForUser(userId, tn);
+        return true;
+      } catch {
+        return false;
+      }
     };
     const credsStatus = {
       mainnet: !!credsRow?.api_key || (await hasEnvCreds(false)),
@@ -278,7 +313,11 @@ export const getDashboard = createServerFn({ method: "GET" })
     const marketSession = getMarketSession();
     try {
       const { creds } = await loadCreds(userId);
-      const sinceMs = (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d.getTime(); })();
+      const sinceMs = (() => {
+        const d = new Date();
+        d.setUTCHours(0, 0, 0, 0);
+        return d.getTime();
+      })();
       const accountUnavailable = (e: unknown) => creds.testnet && isBinanceNetworkBlock(e);
       const [acct, risk, premium, income, liveOrders] = await Promise.all([
         binance.account(creds).catch((e) => {
@@ -298,12 +337,14 @@ export const getDashboard = createServerFn({ method: "GET" })
         .filter((r) => ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(r.incomeType))
         .reduce((s, r) => s + Number(r.income || 0), 0);
       const marginBalance = parseFloat(acct?.totalMarginBalance ?? "0") || 0;
-      account = acct ? {
-        totalWalletBalance: acct.totalWalletBalance,
-        totalUnrealizedProfit: acct.totalUnrealizedProfit,
-        totalMarginBalance: acct.totalMarginBalance,
-        availableBalance: acct.availableBalance,
-      } : null;
+      account = acct
+        ? {
+            totalWalletBalance: acct.totalWalletBalance,
+            totalUnrealizedProfit: acct.totalUnrealizedProfit,
+            totalMarginBalance: acct.totalMarginBalance,
+            availableBalance: acct.availableBalance,
+          }
+        : null;
       const acctByKey = new Map<string, any>(
         (acct?.positions ?? []).map((p: any) => [`${p.symbol}:${p.positionSide}`, p]),
       );
@@ -317,7 +358,10 @@ export const getDashboard = createServerFn({ method: "GET" })
       await Promise.all(
         enabledForTrend.map(async (s: any) => {
           const mark = parseFloat(premiumBySym.get(s.symbol)?.markPrice ?? "0") || 0;
-          if (mark <= 0) { trendBias[s.symbol] = null; return; }
+          if (mark <= 0) {
+            trendBias[s.symbol] = null;
+            return;
+          }
           trendBias[s.symbol] = await getTrendBias(
             creds,
             s.symbol,
@@ -338,7 +382,8 @@ export const getDashboard = createServerFn({ method: "GET" })
           const premiumMark = parseFloat(premiumBySym.get(p.symbol)?.markPrice ?? "0") || 0;
           const mark = premiumMark > 0 ? premiumMark : parseFloat(p.markPrice) || 0;
           // Recompute uPnL from the fresh mark so the UI matches Binance live.
-          const upnl = entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
+          const upnl =
+            entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
           const notional = Math.abs(amt * mark) || Math.abs(parseFloat(p.notional ?? "0")) || 0;
           const estCloseFeeUsdt = notional * FUTURES_TAKER_FEE_RATE;
           const estRoundTripFeeUsdt = notional * (FUTURES_TAKER_FEE_RATE + FUTURES_MAKER_FEE_RATE);
@@ -346,7 +391,8 @@ export const getDashboard = createServerFn({ method: "GET" })
           const leverage = parseFloat(p.leverage) || 1;
           const initialMargin = leverage > 0 ? notional / leverage : 0;
           const roiPct = initialMargin > 0 ? (upnl / initialMargin) * 100 : 0;
-          const netRoiPct = initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
+          const netRoiPct =
+            initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
           const acctPos = acctByKey.get(`${p.symbol}:${p.positionSide}`);
           const maintMargin = parseFloat(acctPos?.maintMargin ?? "0") || 0;
           const isolated = p.marginType === "isolated";
@@ -361,7 +407,7 @@ export const getDashboard = createServerFn({ method: "GET" })
           const tpTargetUsdt = notional * (spacingPct / 100);
           const tpTargetPrice =
             spacingPct > 0 && entry > 0
-              ? entry * (1 + (amt >= 0 ? 1 : -1) * spacingPct / 100)
+              ? entry * (1 + ((amt >= 0 ? 1 : -1) * spacingPct) / 100)
               : null;
           return {
             symbol: p.symbol,
@@ -436,7 +482,7 @@ export const getDashboard = createServerFn({ method: "GET" })
       credsStatus,
       trendBias,
       marketSession,
-      binanceNetworkRoute: binanceNetworkRouteStatus(),
+      binanceNetworkRoute: await binanceNetworkRouteStatus(),
     };
   });
 
@@ -447,7 +493,8 @@ export const getTrades = createServerFn({ method: "GET" })
       const local = getLocalBotState(context.userId);
       const creds = await getCredsForUser(context.userId, true);
       const enabledSymbols = local.symbols.filter((s) => s.enabled).map((s) => s.symbol);
-      const symbols = enabledSymbols.length > 0 ? enabledSymbols : local.symbols.map((s) => s.symbol);
+      const symbols =
+        enabledSymbols.length > 0 ? enabledSymbols : local.symbols.map((s) => s.symbol);
       const trades = (
         await Promise.all(
           symbols.map(async (symbol) => {
@@ -507,7 +554,10 @@ export const setBotRunning = createServerFn({ method: "POST" })
       if (data.running) {
         const { creds, testnet } = await loadCreds(context.userId);
         const check = await verifyFuturesCreds(creds);
-        if (!check.ok && !(testnet && check.reason?.includes("not treated as a credential failure"))) {
+        if (
+          !check.ok &&
+          !(testnet && check.reason?.includes("not treated as a credential failure"))
+        ) {
           throw new Error(`Can't start bot: ${check.reason}`);
         }
         if (check.ok) {
@@ -525,7 +575,11 @@ export const setBotRunning = createServerFn({ method: "POST" })
       if (data.running) {
         ensureLocalBotRunner(context.userId);
         runLocalBotTick(context.userId).catch((error) => {
-          addLocalLog(context.userId, "error", `Initial local tick failed: ${(error as Error).message}`);
+          addLocalLog(
+            context.userId,
+            "error",
+            `Initial local tick failed: ${(error as Error).message}`,
+          );
         });
       } else {
         stopLocalBotRunner(context.userId);
@@ -555,9 +609,16 @@ export const setBotRunning = createServerFn({ method: "POST" })
       const check = await verifyFuturesCreds(creds);
       if (!check.ok) {
         if (testnet && check.reason?.includes("not treated as a credential failure")) {
-          await botLog(context.userId, "warn", `Pre-flight account check skipped — ${check.reason}`);
+          await botLog(
+            context.userId,
+            "warn",
+            `Pre-flight account check skipped — ${check.reason}`,
+          );
         } else {
-          await pauseBotForCredentialError(context.userId, check.reason ?? "Credential check failed");
+          await pauseBotForCredentialError(
+            context.userId,
+            check.reason ?? "Credential check failed",
+          );
           throw new Error(`Can't start bot: ${check.reason}`);
         }
       } else {
@@ -582,7 +643,11 @@ export const setTestnet = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     if (!hasSupabaseAdminEnv()) {
       updateLocalBotConfig(context.userId, { testnet: data.testnet, is_running: false });
-      addLocalLog(context.userId, "warn", `Switched to ${data.testnet ? "TESTNET" : "MAINNET"} and stopped the bot`);
+      addLocalLog(
+        context.userId,
+        "warn",
+        `Switched to ${data.testnet ? "TESTNET" : "MAINNET"} and stopped the bot`,
+      );
       return { ok: true };
     }
 
@@ -654,7 +719,11 @@ export const runAutoSelect = createServerFn({ method: "POST" })
       const max = Number(local.cfg.auto_select_max_symbols ?? 4);
       const top = local.symbols.slice(0, max).map((s) => ({ symbol: s.symbol, score: 0 }));
       for (const item of top) updateLocalSymbol(context.userId, item.symbol, { enabled: true });
-      addLocalLog(context.userId, "info", `Local ranking enabled: ${top.map((t) => t.symbol).join(", ")}`);
+      addLocalLog(
+        context.userId,
+        "info",
+        `Local ranking enabled: ${top.map((t) => t.symbol).join(", ")}`,
+      );
       return { ok: true, top };
     }
 
@@ -686,15 +755,15 @@ export const getNewsStatus = createServerFn({ method: "GET" })
     }
     const { getBlackout } = await import("@/lib/bot/news.server");
     const currencies = String((cfg as any).news_currencies ?? "USD")
-      .split(",").map((s) => s.trim()).filter(Boolean);
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const bo = await getBlackout({
       windowMinutes: Number((cfg as any).news_pause_window_min ?? 30),
       currencies,
     });
     return { enabled: true, ...bo } as const;
   });
-
-
 
 const symbolSchema = z.object({
   symbol: z.string(),
@@ -735,7 +804,12 @@ export const updateSymbol = createServerFn({ method: "POST" })
       if (getLocalBotState(context.userId).cfg.is_running) {
         ensureLocalBotRunner(context.userId);
         runLocalBotTick(context.userId).catch((error) => {
-          addLocalLog(context.userId, "error", `Symbol update tick failed: ${(error as Error).message}`, data.symbol);
+          addLocalLog(
+            context.userId,
+            "error",
+            `Symbol update tick failed: ${(error as Error).message}`,
+            data.symbol,
+          );
         });
       }
       return { ok: true };
@@ -764,7 +838,6 @@ export const learnSymbol = createServerFn({ method: "POST" })
     return learnFromTrades(cfg as any, { force: true });
   });
 
-
 export const killSwitch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
@@ -782,7 +855,11 @@ export const killSwitch = createServerFn({ method: "POST" })
           addLocalLog(userId, "warn", `cancelAll ${s.symbol}: ${(e as Error).message}`, s.symbol);
         }
       }
-      addLocalLog(userId, "error", "KILL SWITCH activated - bot stopped and all open orders were canceled");
+      addLocalLog(
+        userId,
+        "error",
+        "KILL SWITCH activated - bot stopped and all open orders were canceled",
+      );
       return { ok: true };
     }
 
@@ -951,9 +1028,7 @@ export const saveBinanceCreds = createServerFn({ method: "POST" })
         .update({ ...patch, updated_at: new Date().toISOString() })
         .eq("user_id", userId);
     } else {
-      await supabaseAdmin
-        .from("user_binance_creds")
-        .insert({ user_id: userId, ...patch });
+      await supabaseAdmin.from("user_binance_creds").insert({ user_id: userId, ...patch });
     }
     await botLog(userId, "info", "Updated Binance API credentials");
     return { ok: true };
@@ -998,7 +1073,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
 
     if (!hasSupabaseAdminEnv()) {
       const available = parseFloat(acct.availableBalance) || 0;
-      const orderSize = Math.max(75, Math.min(150, Math.round((available * 0.02) * 100) / 100));
+      const orderSize = Math.max(75, Math.min(150, Math.round(available * 0.02 * 100) / 100));
       const lowerBound = Math.round(low7d * 0.98 * 1e6) / 1e6;
       const upperBound = Math.round(high7d * 1.02 * 1e6) / 1e6;
       updateLocalSymbol(userId, symbol, {
@@ -1013,7 +1088,9 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
         upper_bound: upperBound,
         backtest_at: new Date().toISOString(),
       });
-      updateLocalBotConfig(userId, { max_total_notional_usdt: Math.max(1500, Math.ceil(orderSize * 3)) });
+      updateLocalBotConfig(userId, {
+        max_total_notional_usdt: Math.max(1500, Math.ceil(orderSize * 3)),
+      });
       addLocalLog(
         userId,
         "info",
@@ -1261,7 +1338,10 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     if (planned > currentCap) {
       await supabaseAdmin
         .from("bot_config")
-        .update({ max_total_notional_usdt: Math.ceil(planned), updated_at: new Date().toISOString() })
+        .update({
+          max_total_notional_usdt: Math.ceil(planned),
+          updated_at: new Date().toISOString(),
+        })
         .eq("user_id", userId);
     }
 

@@ -1,6 +1,6 @@
 # VpnHood Route for Binance
 
-Binance can be blocked by some local providers. This app supports routing all Binance REST requests through a VPN/proxy route with `BINANCE_PROXY_URL`.
+Binance can be blocked by some local providers. This app supports routing all Binance REST requests through a VPN/proxy route with `BINANCE_PROXY_URL`. It also honors standard `HTTPS_PROXY` / `HTTP_PROXY` environment variables for Binance requests.
 
 ## VpnHood
 
@@ -41,6 +41,8 @@ Then restart the dev server.
 
 ## Check
 
-After restart, open Settings in the app. The "Binance network route" card should show `Proxy set` when `BINANCE_PROXY_URL` is configured.
+After restart, open Settings in the app. The "Binance network route" card should show `Proxy set` when `BINANCE_PROXY_URL`, `HTTPS_PROXY`, or `HTTP_PROXY` is configured.
+
+The card also shows the server/VPN public IP. If your Binance API key has an IP allow-list, add that exact IP in Binance while the VPN is on. Browser-only VPN extensions do not affect the bot server; the VPN or proxy must run on the same machine or VPS as the server.
 
 Keep VPN/proxy credentials out of Git. `.env.local` is ignored by this repository.

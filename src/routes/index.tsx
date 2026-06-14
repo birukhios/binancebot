@@ -31,7 +31,14 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toast } from "sonner";
 import { AlertTriangle, LogOut, Power, RefreshCw } from "lucide-react";
 
@@ -83,10 +90,27 @@ function Dashboard() {
     refetchOnWindowFocus: true,
     staleTime: 0,
   });
-  const trades = useQuery({ queryKey: ["trades", sessionUserId], queryFn: () => tradesFn(), enabled: authChecked && !!sessionUserId, retry: false });
-  const logs = useQuery({ queryKey: ["logs", sessionUserId], queryFn: () => logsFn(), enabled: authChecked && !!sessionUserId, retry: false, refetchInterval: (query) => (query.state.error ? false : 10000) });
+  const trades = useQuery({
+    queryKey: ["trades", sessionUserId],
+    queryFn: () => tradesFn(),
+    enabled: authChecked && !!sessionUserId,
+    retry: false,
+  });
+  const logs = useQuery({
+    queryKey: ["logs", sessionUserId],
+    queryFn: () => logsFn(),
+    enabled: authChecked && !!sessionUserId,
+    retry: false,
+    refetchInterval: (query) => (query.state.error ? false : 10000),
+  });
   const newsFn = useServerFn(getNewsStatus);
-  const news = useQuery({ queryKey: ["news", sessionUserId], queryFn: () => newsFn(), enabled: authChecked && !!sessionUserId, retry: false, refetchInterval: (query) => (query.state.error ? false : 60000) });
+  const news = useQuery({
+    queryKey: ["news", sessionUserId],
+    queryFn: () => newsFn(),
+    enabled: authChecked && !!sessionUserId,
+    retry: false,
+    refetchInterval: (query) => (query.state.error ? false : 60000),
+  });
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -106,7 +130,6 @@ function Dashboard() {
   const optimizeFn = useServerFn(optimizeSymbol);
   const saveCredsFn = useServerFn(saveBinanceCreds);
   const learnFn = useServerFn(learnSymbol);
-
 
   const startStopMut = useMutation({
     mutationFn: (running: boolean) => startStop({ data: { running } }),
@@ -129,14 +152,18 @@ function Dashboard() {
   const testConnMut = useMutation({
     mutationFn: () => testConn(),
     onSuccess: (r) => {
-      if (r.ok) toast.success(`Connected to ${r.testnet ? "TESTNET" : "MAINNET"} — balance ${r.balance} USDT`);
+      if (r.ok)
+        toast.success(
+          `Connected to ${r.testnet ? "TESTNET" : "MAINNET"} — balance ${r.balance} USDT`,
+        );
       else toast.error(r.error ?? "Failed");
     },
   });
 
   if (!authChecked) return <div className="p-8 text-muted-foreground">Loading…</div>;
   if (dash.isError) {
-    const message = dash.error instanceof Error ? dash.error.message : "The dashboard could not load.";
+    const message =
+      dash.error instanceof Error ? dash.error.message : "The dashboard could not load.";
 
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -145,10 +172,10 @@ function Dashboard() {
             <CardTitle>Dashboard setup required</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              The dashboard server request failed.
-            </p>
-            <pre className="overflow-auto rounded-md bg-muted p-3 text-xs text-muted-foreground">{message}</pre>
+            <p className="text-sm text-muted-foreground">The dashboard server request failed.</p>
+            <pre className="overflow-auto rounded-md bg-muted p-3 text-xs text-muted-foreground">
+              {message}
+            </pre>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => dash.refetch()}>
                 Try again
@@ -179,10 +206,22 @@ function Dashboard() {
   const symbols = dash.data?.symbols ?? [];
   const credsStatus = dash.data?.credsStatus;
   const credsReady = cfg?.testnet ? !!credsStatus?.testnet : !!credsStatus?.mainnet;
-  const grossUnrealized = positions.reduce((sum: number, p: any) => sum + Number(p.unrealizedProfit ?? 0), 0);
-  const netUnrealized = positions.reduce((sum: number, p: any) => sum + Number(p.netUnrealizedAfterCloseFee ?? p.unrealizedProfit ?? 0), 0);
-  const estCloseFees = positions.reduce((sum: number, p: any) => sum + Number(p.estCloseFeeUsdt ?? 0), 0);
-  const estOpenOrderFees = openOrders.reduce((sum: number, o: any) => sum + Number(o.estMakerFeeUsdt ?? 0), 0);
+  const grossUnrealized = positions.reduce(
+    (sum: number, p: any) => sum + Number(p.unrealizedProfit ?? 0),
+    0,
+  );
+  const netUnrealized = positions.reduce(
+    (sum: number, p: any) => sum + Number(p.netUnrealizedAfterCloseFee ?? p.unrealizedProfit ?? 0),
+    0,
+  );
+  const estCloseFees = positions.reduce(
+    (sum: number, p: any) => sum + Number(p.estCloseFeeUsdt ?? 0),
+    0,
+  );
+  const estOpenOrderFees = openOrders.reduce(
+    (sum: number, o: any) => sum + Number(o.estMakerFeeUsdt ?? 0),
+    0,
+  );
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -192,8 +231,7 @@ function Dashboard() {
           <div>
             <h1 className="text-2xl font-bold">Grid Trading Bot</h1>
             <p className="text-sm text-muted-foreground">
-              {session.data?.user.email ?? "Signed in"} ·{" "}
-              {cfg?.testnet ? "TESTNET" : "MAINNET"} ·{" "}
+              {session.data?.user.email ?? "Signed in"} · {cfg?.testnet ? "TESTNET" : "MAINNET"} ·{" "}
               {cfg?.is_running ? (
                 <span className="text-green-600">RUNNING</span>
               ) : (
@@ -202,15 +240,25 @@ function Dashboard() {
               {dash.data?.marketSession && (
                 <>
                   {" · "}
-                  <span title={`Trend-gate flat band: ±${dash.data.marketSession.flatThresholdPct}%`}>
-                    Session: <span className="font-medium uppercase">{dash.data.marketSession.name.replace(/_/g, " ")}</span>
+                  <span
+                    title={`Trend-gate flat band: ±${dash.data.marketSession.flatThresholdPct}%`}
+                  >
+                    Session:{" "}
+                    <span className="font-medium uppercase">
+                      {dash.data.marketSession.name.replace(/_/g, " ")}
+                    </span>
                   </span>
                 </>
               )}
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => testConnMut.mutate()} disabled={testConnMut.isPending}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => testConnMut.mutate()}
+              disabled={testConnMut.isPending}
+            >
               <RefreshCw className="mr-2 h-4 w-4" /> Test API
             </Button>
             <Button
@@ -227,7 +275,8 @@ function Dashboard() {
               variant="destructive"
               size="sm"
               onClick={() => {
-                if (confirm("Stop bot AND cancel all open orders on Binance. Continue?")) killMut.mutate();
+                if (confirm("Stop bot AND cancel all open orders on Binance. Continue?"))
+                  killMut.mutate();
               }}
             >
               <AlertTriangle className="mr-2 h-4 w-4" /> Kill
@@ -251,7 +300,9 @@ function Dashboard() {
           <Card className="border-orange-500/60 bg-orange-500/10">
             <CardContent className="pt-6">
               <p className="text-sm">
-                <strong>Set up required:</strong> Add your Binance {cfg?.testnet ? "testnet" : "mainnet"} API key and secret in the <strong>Settings</strong> tab below before you can start the bot.
+                <strong>Set up required:</strong> Add your Binance{" "}
+                {cfg?.testnet ? "testnet" : "mainnet"} API key and secret in the{" "}
+                <strong>Settings</strong> tab below before you can start the bot.
               </p>
             </CardContent>
           </Card>
@@ -265,7 +316,16 @@ function Dashboard() {
               </p>
               {!dash.data?.binanceNetworkRoute?.proxyConfigured && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Connect Cloudflare WARP/VpnHood on this machine, or set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>, then restart the server.
+                  Connect Cloudflare WARP/VpnHood on this machine, or set{" "}
+                  <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>, then restart the
+                  server.
+                </p>
+              )}
+              {dash.data?.binanceNetworkRoute?.proxyConfigured && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Proxy is set via <code>{dash.data.binanceNetworkRoute.proxySource}</code>. If
+                  Binance says the key/IP is invalid, allow-list the server/VPN public IP shown in
+                  Settings.
                 </p>
               )}
             </CardContent>
@@ -274,14 +334,21 @@ function Dashboard() {
 
         {/* KPIs */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <Stat label="Wallet balance" value={account?.totalWalletBalance ? `${num(account.totalWalletBalance)} USDT` : "—"} />
+          <Stat
+            label="Wallet balance"
+            value={account?.totalWalletBalance ? `${num(account.totalWalletBalance)} USDT` : "—"}
+          />
           <Stat label="Gross P&L" value={`${num(grossUnrealized)} USDT`} />
           <Stat label="Net if closed" value={`${num(netUnrealized)} USDT`} />
           <Stat label="Realized today" value={`${dash.data?.realizedToday.toFixed(4)} USDT`} />
           <Stat label="Est. fees" value={`${num(estCloseFees + estOpenOrderFees)} USDT`} />
         </div>
 
-        <Tabs defaultValue={credsReady ? "overview" : "settings"} key={credsReady ? "ready" : "setup"} className="w-full">
+        <Tabs
+          defaultValue={credsReady ? "overview" : "settings"}
+          key={credsReady ? "ready" : "setup"}
+          className="w-full"
+        >
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="symbols">Symbols</TabsTrigger>
@@ -298,7 +365,9 @@ function Dashboard() {
               <CardContent>
                 {positions.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    {openOrders.length > 0 ? "No filled positions yet. Open grid orders are shown below." : "No open positions."}
+                    {openOrders.length > 0
+                      ? "No filled positions yet. Open grid orders are shown below."
+                      : "No open positions."}
                   </p>
                 ) : (
                   <Table>
@@ -338,9 +407,17 @@ function Dashboard() {
                           <TableRow key={p.symbol}>
                             <TableCell className="font-mono">
                               {p.symbol}
-                              <span className="ml-2 text-xs text-muted-foreground">{p.leverage}x {isolated ? "ISO" : "CROSS"}</span>
+                              <span className="ml-2 text-xs text-muted-foreground">
+                                {p.leverage}x {isolated ? "ISO" : "CROSS"}
+                              </span>
                             </TableCell>
-                            <TableCell className={parseFloat(p.positionAmt) >= 0 ? "text-green-600" : "text-destructive"}>
+                            <TableCell
+                              className={
+                                parseFloat(p.positionAmt) >= 0
+                                  ? "text-green-600"
+                                  : "text-destructive"
+                              }
+                            >
                               {p.positionAmt}
                             </TableCell>
                             <TableCell>{num(p.entryPrice)}</TableCell>
@@ -350,26 +427,41 @@ function Dashboard() {
                               {p.tpTargetPrice ? (
                                 <div>
                                   <div className="font-medium">{num(p.tpTargetPrice)}</div>
-                                  <div className="text-xs text-muted-foreground">≥ {Number(p.tpTargetUsdt).toFixed(2)} USDT</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    ≥ {Number(p.tpTargetUsdt).toFixed(2)} USDT
+                                  </div>
                                 </div>
                               ) : (
                                 "—"
                               )}
                             </TableCell>
-                            <TableCell className="text-destructive">{liq > 0 ? num(liq) : "—"}</TableCell>
-                            <TableCell className={mr >= 80 ? "text-destructive" : mr >= 50 ? "text-yellow-600" : ""}>
+                            <TableCell className="text-destructive">
+                              {liq > 0 ? num(liq) : "—"}
+                            </TableCell>
+                            <TableCell
+                              className={
+                                mr >= 80 ? "text-destructive" : mr >= 50 ? "text-yellow-600" : ""
+                              }
+                            >
                               {mr.toFixed(2)}%
                             </TableCell>
                             <TableCell>{marginVal.toFixed(2)} USDT</TableCell>
-                            <TableCell className={upnl >= 0 ? "text-green-600" : "text-destructive"}>
-                              {num(upnl)} ({roi >= 0 ? "+" : ""}{roi.toFixed(2)}%)
+                            <TableCell
+                              className={upnl >= 0 ? "text-green-600" : "text-destructive"}
+                            >
+                              {num(upnl)} ({roi >= 0 ? "+" : ""}
+                              {roi.toFixed(2)}%)
                             </TableCell>
-                            <TableCell className={netPnl >= 0 ? "text-green-600" : "text-destructive"}>
-                              {num(netPnl)} ({netRoi >= 0 ? "+" : ""}{netRoi.toFixed(2)}%)
+                            <TableCell
+                              className={netPnl >= 0 ? "text-green-600" : "text-destructive"}
+                            >
+                              {num(netPnl)} ({netRoi >= 0 ? "+" : ""}
+                              {netRoi.toFixed(2)}%)
                             </TableCell>
                             <TableCell className="text-muted-foreground">{num(closeFee)}</TableCell>
                             <TableCell className={fee >= 0 ? "text-green-600" : "text-destructive"}>
-                              {fee >= 0 ? "+" : ""}{fee.toFixed(4)}
+                              {fee >= 0 ? "+" : ""}
+                              {fee.toFixed(4)}
                             </TableCell>
                             <TableCell>
                               <Button
@@ -422,12 +514,18 @@ function Dashboard() {
                       {openOrders.map((o: any) => (
                         <TableRow key={`${o.symbol}-${o.orderId}`}>
                           <TableCell className="font-mono">{o.symbol}</TableCell>
-                          <TableCell className={o.side === "BUY" ? "text-green-600" : "text-destructive"}>{o.side}</TableCell>
+                          <TableCell
+                            className={o.side === "BUY" ? "text-green-600" : "text-destructive"}
+                          >
+                            {o.side}
+                          </TableCell>
                           <TableCell>{num(o.price)}</TableCell>
                           <TableCell>{num(o.origQty)}</TableCell>
                           <TableCell>{num(o.executedQty)}</TableCell>
                           <TableCell>{num(o.notional)} USDT</TableCell>
-                          <TableCell className="text-muted-foreground">{num(o.estMakerFeeUsdt ?? 0)} USDT</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {num(o.estMakerFeeUsdt ?? 0)} USDT
+                          </TableCell>
                           <TableCell>{o.status}</TableCell>
                         </TableRow>
                       ))}
@@ -526,10 +624,8 @@ function Dashboard() {
                   }
                 }}
               />
-
             ))}
           </TabsContent>
-
 
           <TabsContent value="trades">
             <Card>
@@ -554,10 +650,14 @@ function Dashboard() {
                       const net = gross - commission;
                       return (
                         <TableRow key={t.id}>
-                          <TableCell className="font-mono text-xs">{new Date(t.filled_at).toLocaleString()}</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {new Date(t.filled_at).toLocaleString()}
+                          </TableCell>
                           <TableCell className="font-mono">{t.symbol}</TableCell>
                           <TableCell>
-                            <Badge variant={t.side === "BUY" ? "default" : "secondary"}>{t.side}</Badge>
+                            <Badge variant={t.side === "BUY" ? "default" : "secondary"}>
+                              {t.side}
+                            </Badge>
                           </TableCell>
                           <TableCell>{num(t.price)}</TableCell>
                           <TableCell>{num(t.qty)}</TableCell>
@@ -589,7 +689,9 @@ function Dashboard() {
               <CardContent className="pt-6 space-y-1 font-mono text-xs">
                 {(logs.data ?? []).map((l: any) => (
                   <div key={l.id} className="flex gap-2">
-                    <span className="text-muted-foreground">{new Date(l.created_at).toLocaleTimeString()}</span>
+                    <span className="text-muted-foreground">
+                      {new Date(l.created_at).toLocaleTimeString()}
+                    </span>
                     <span
                       className={
                         l.level === "error"
@@ -605,7 +707,9 @@ function Dashboard() {
                     <span>{l.message}</span>
                   </div>
                 ))}
-                {(logs.data ?? []).length === 0 && <p className="text-muted-foreground">No logs yet.</p>}
+                {(logs.data ?? []).length === 0 && (
+                  <p className="text-muted-foreground">No logs yet.</p>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -626,7 +730,8 @@ function Dashboard() {
                   <Switch
                     checked={cfg?.testnet ?? true}
                     onCheckedChange={async (checked) => {
-                      if (!checked && !confirm("Switch to MAINNET (real money)? Bot will stop.")) return;
+                      if (!checked && !confirm("Switch to MAINNET (real money)? Bot will stop."))
+                        return;
                       await toggleTestnet({ data: { testnet: checked } });
                       invalidate();
                     }}
@@ -647,83 +752,161 @@ function Dashboard() {
                         }
                       }}
                     />
-                </div>
-                <div className="space-y-4 rounded-md border p-4">
-                  <div>
-                    <Label className="text-base">Intelligence</Label>
-                    <p className="text-xs text-muted-foreground">Auto-select symbols, drawdown circuit-breaker, news-aware pause.</p>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="autosel">Auto-select symbols</Label>
-                    <Switch
-                      id="autosel"
-                      checked={(cfg as any)?.auto_select_enabled ?? false}
-                      onCheckedChange={async (c) => { await setIntelligence({ data: { auto_select_enabled: c } }); invalidate(); }}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxsym">Max auto-managed symbols</Label>
-                    <Input id="maxsym" type="number" min={1} max={15} defaultValue={(cfg as any)?.auto_select_max_symbols ?? 4}
-                      onBlur={async (e) => { const v = parseInt(e.target.value); if (v >= 1 && v <= 15) { await setIntelligence({ data: { auto_select_max_symbols: v } }); toast.success("Saved"); } }} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="ddpct">Drawdown pause % (24h)</Label>
-                    <Input id="ddpct" type="number" min={0} max={50} step={0.5} defaultValue={(cfg as any)?.drawdown_pause_pct ?? 3}
-                      onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) { await setIntelligence({ data: { drawdown_pause_pct: v } }); toast.success("Saved"); } }} />
-                    <p className="text-xs text-muted-foreground">Bot auto-stops if 24h P&L drops below -this % of wallet.</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={async () => {
-                    const r = await runAutoSelect({ data: undefined as any });
-                    toast.success(`Picked: ${(r as any).top?.map((t: any) => t.symbol).join(", ") ?? "n/a"}`);
-                    invalidate();
-                  }}>Run ranking now</Button>
-
-                  <div className="border-t pt-4 space-y-3">
+                  <div className="space-y-4 rounded-md border p-4">
+                    <div>
+                      <Label className="text-base">Intelligence</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Auto-select symbols, drawdown circuit-breaker, news-aware pause.
+                      </p>
+                    </div>
                     <div className="flex items-center justify-between">
-                      <div>
-                        <Label htmlFor="newspause" className="text-base">News-aware pause</Label>
-                        <p className="text-xs text-muted-foreground">Skip new grid entries around high-impact events.</p>
-                      </div>
+                      <Label htmlFor="autosel">Auto-select symbols</Label>
                       <Switch
-                        id="newspause"
-                        checked={(cfg as any)?.news_pause_enabled ?? true}
-                        onCheckedChange={async (c) => { await setIntelligence({ data: { news_pause_enabled: c } }); invalidate(); qc.invalidateQueries({ queryKey: ["news"] }); }}
+                        id="autosel"
+                        checked={(cfg as any)?.auto_select_enabled ?? false}
+                        onCheckedChange={async (c) => {
+                          await setIntelligence({ data: { auto_select_enabled: c } });
+                          invalidate();
+                        }}
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-2">
-                        <Label htmlFor="newswin">Window (min)</Label>
-                        <Input id="newswin" type="number" min={0} max={240} step={5} defaultValue={(cfg as any)?.news_pause_window_min ?? 30}
-                          onBlur={async (e) => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 0 && v <= 240) { await setIntelligence({ data: { news_pause_window_min: v } }); toast.success("Saved"); qc.invalidateQueries({ queryKey: ["news"] }); } }} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="newsccy">Currencies</Label>
-                        <Input id="newsccy" placeholder="USD,EUR" defaultValue={(cfg as any)?.news_currencies ?? "USD"}
-                          onBlur={async (e) => { const v = e.target.value.trim(); if (v) { await setIntelligence({ data: { news_currencies: v } }); toast.success("Saved"); qc.invalidateQueries({ queryKey: ["news"] }); } }} />
-                      </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="maxsym">Max auto-managed symbols</Label>
+                      <Input
+                        id="maxsym"
+                        type="number"
+                        min={1}
+                        max={15}
+                        defaultValue={(cfg as any)?.auto_select_max_symbols ?? 4}
+                        onBlur={async (e) => {
+                          const v = parseInt(e.target.value);
+                          if (v >= 1 && v <= 15) {
+                            await setIntelligence({ data: { auto_select_max_symbols: v } });
+                            toast.success("Saved");
+                          }
+                        }}
+                      />
                     </div>
-                    {news.data?.enabled && (
-                      news.data.active && news.data.event ? (
-                        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-                          <Badge variant="destructive" className="mb-1">News blackout</Badge>
-                          <div>{news.data.event.country} · {news.data.event.title}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {news.data.event.minutesUntil > 0
-                              ? `in ${news.data.event.minutesUntil} min`
-                              : `${Math.abs(news.data.event.minutesUntil)} min ago`}
-                          </div>
-                        </div>
-                      ) : news.data.next ? (
-                        <div className="text-xs text-muted-foreground">
-                          Next high-impact: {news.data.next.country} {news.data.next.title} in {news.data.next.minutesUntil} min
-                        </div>
-                      ) : (
-                        <div className="text-xs text-muted-foreground">No upcoming high-impact events this week.</div>
-                      )
-                    )}
-                  </div>
-                </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ddpct">Drawdown pause % (24h)</Label>
+                      <Input
+                        id="ddpct"
+                        type="number"
+                        min={0}
+                        max={50}
+                        step={0.5}
+                        defaultValue={(cfg as any)?.drawdown_pause_pct ?? 3}
+                        onBlur={async (e) => {
+                          const v = parseFloat(e.target.value);
+                          if (!isNaN(v)) {
+                            await setIntelligence({ data: { drawdown_pause_pct: v } });
+                            toast.success("Saved");
+                          }
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Bot auto-stops if 24h P&L drops below -this % of wallet.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        const r = await runAutoSelect({ data: undefined as any });
+                        toast.success(
+                          `Picked: ${(r as any).top?.map((t: any) => t.symbol).join(", ") ?? "n/a"}`,
+                        );
+                        invalidate();
+                      }}
+                    >
+                      Run ranking now
+                    </Button>
 
+                    <div className="border-t pt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label htmlFor="newspause" className="text-base">
+                            News-aware pause
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Skip new grid entries around high-impact events.
+                          </p>
+                        </div>
+                        <Switch
+                          id="newspause"
+                          checked={(cfg as any)?.news_pause_enabled ?? true}
+                          onCheckedChange={async (c) => {
+                            await setIntelligence({ data: { news_pause_enabled: c } });
+                            invalidate();
+                            qc.invalidateQueries({ queryKey: ["news"] });
+                          }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="newswin">Window (min)</Label>
+                          <Input
+                            id="newswin"
+                            type="number"
+                            min={0}
+                            max={240}
+                            step={5}
+                            defaultValue={(cfg as any)?.news_pause_window_min ?? 30}
+                            onBlur={async (e) => {
+                              const v = parseInt(e.target.value);
+                              if (!isNaN(v) && v >= 0 && v <= 240) {
+                                await setIntelligence({ data: { news_pause_window_min: v } });
+                                toast.success("Saved");
+                                qc.invalidateQueries({ queryKey: ["news"] });
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="newsccy">Currencies</Label>
+                          <Input
+                            id="newsccy"
+                            placeholder="USD,EUR"
+                            defaultValue={(cfg as any)?.news_currencies ?? "USD"}
+                            onBlur={async (e) => {
+                              const v = e.target.value.trim();
+                              if (v) {
+                                await setIntelligence({ data: { news_currencies: v } });
+                                toast.success("Saved");
+                                qc.invalidateQueries({ queryKey: ["news"] });
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {news.data?.enabled &&
+                        (news.data.active && news.data.event ? (
+                          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                            <Badge variant="destructive" className="mb-1">
+                              News blackout
+                            </Badge>
+                            <div>
+                              {news.data.event.country} · {news.data.event.title}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {news.data.event.minutesUntil > 0
+                                ? `in ${news.data.event.minutesUntil} min`
+                                : `${Math.abs(news.data.event.minutesUntil)} min ago`}
+                            </div>
+                          </div>
+                        ) : news.data.next ? (
+                          <div className="text-xs text-muted-foreground">
+                            Next high-impact: {news.data.next.country} {news.data.next.title} in{" "}
+                            {news.data.next.minutesUntil} min
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">
+                            No upcoming high-impact events this week.
+                          </div>
+                        ))}
+                    </div>
+                  </div>
                 </div>
                 <BinanceKeysCard
                   credsStatus={dash.data?.credsStatus}
@@ -735,10 +918,13 @@ function Dashboard() {
                 />
                 <BinanceNetworkRouteCard
                   proxyConfigured={!!dash.data?.binanceNetworkRoute?.proxyConfigured}
+                  proxySource={dash.data?.binanceNetworkRoute?.proxySource}
+                  serverPublicIp={dash.data?.binanceNetworkRoute?.serverPublicIp}
                   vpnhoodRepoUrl={dash.data?.binanceNetworkRoute?.vpnhoodRepoUrl}
                 />
                 <div className="rounded-md border border-muted bg-muted/30 p-4 text-xs text-muted-foreground">
-                  Your keys are stored on the server and are only used when this bot runs. They are never sent back to the browser.
+                  Your keys are stored on the server and are only used when this bot runs. They are
+                  never sent back to the browser.
                 </div>
               </CardContent>
             </Card>
@@ -834,7 +1020,11 @@ function SymbolCard({
               }
               title={`Trend filter bias on ${s.trend_interval ?? "1h"} EMA${s.trend_ema_period ?? 50}`}
             >
-              {bias === "up" ? "↑ Uptrend (no shorts)" : bias === "down" ? "↓ Downtrend (no longs)" : "↔ Flat"}
+              {bias === "up"
+                ? "↑ Uptrend (no shorts)"
+                : bias === "down"
+                  ? "↓ Downtrend (no longs)"
+                  : "↔ Flat"}
             </Badge>
           )}
         </div>
@@ -870,10 +1060,26 @@ function SymbolCard({
           </div>
         )}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Field label="Levels (each side)" value={form.grid_levels} onChange={(v) => setForm({ ...form, grid_levels: parseInt(v) || 1 })} />
-          <Field label="Spacing %" value={form.grid_spacing_pct} onChange={(v) => setForm({ ...form, grid_spacing_pct: parseFloat(v) || 0.1 })} />
-          <Field label="Order size (USDT)" value={form.order_size_usdt} onChange={(v) => setForm({ ...form, order_size_usdt: parseFloat(v) || 5 })} />
-          <Field label="Leverage" value={form.leverage} onChange={(v) => setForm({ ...form, leverage: parseInt(v) || 1 })} />
+          <Field
+            label="Levels (each side)"
+            value={form.grid_levels}
+            onChange={(v) => setForm({ ...form, grid_levels: parseInt(v) || 1 })}
+          />
+          <Field
+            label="Spacing %"
+            value={form.grid_spacing_pct}
+            onChange={(v) => setForm({ ...form, grid_spacing_pct: parseFloat(v) || 0.1 })}
+          />
+          <Field
+            label="Order size (USDT)"
+            value={form.order_size_usdt}
+            onChange={(v) => setForm({ ...form, order_size_usdt: parseFloat(v) || 5 })}
+          />
+          <Field
+            label="Leverage"
+            value={form.leverage}
+            onChange={(v) => setForm({ ...form, leverage: parseInt(v) || 1 })}
+          />
           <Field
             label="Lower bound (opt)"
             value={form.lower_bound ?? ""}
@@ -903,14 +1109,32 @@ function SymbolCard({
             />
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Field label="Min spacing %" value={form.min_spacing_pct} onChange={(v) => setForm({ ...form, min_spacing_pct: parseFloat(v) || 0.1 })} />
-            <Field label="Max spacing %" value={form.max_spacing_pct} onChange={(v) => setForm({ ...form, max_spacing_pct: parseFloat(v) || 5 })} />
-            <Field label="Min size (USDT)" value={form.min_order_size_usdt} onChange={(v) => setForm({ ...form, min_order_size_usdt: parseFloat(v) || 5 })} />
-            <Field label="Max size (USDT)" value={form.max_order_size_usdt} onChange={(v) => setForm({ ...form, max_order_size_usdt: parseFloat(v) || 500 })} />
+            <Field
+              label="Min spacing %"
+              value={form.min_spacing_pct}
+              onChange={(v) => setForm({ ...form, min_spacing_pct: parseFloat(v) || 0.1 })}
+            />
+            <Field
+              label="Max spacing %"
+              value={form.max_spacing_pct}
+              onChange={(v) => setForm({ ...form, max_spacing_pct: parseFloat(v) || 5 })}
+            />
+            <Field
+              label="Min size (USDT)"
+              value={form.min_order_size_usdt}
+              onChange={(v) => setForm({ ...form, min_order_size_usdt: parseFloat(v) || 5 })}
+            />
+            <Field
+              label="Max size (USDT)"
+              value={form.max_order_size_usdt}
+              onChange={(v) => setForm({ ...form, max_order_size_usdt: parseFloat(v) || 500 })}
+            />
           </div>
           {s.learning_notes && (
             <p className="text-muted-foreground mt-2 font-mono text-xs">
-              Last learn{s.last_learned_at ? ` (${new Date(s.last_learned_at).toLocaleString()})` : ""}: {s.learning_notes}
+              Last learn
+              {s.last_learned_at ? ` (${new Date(s.last_learned_at).toLocaleString()})` : ""}:{" "}
+              {s.learning_notes}
             </p>
           )}
         </div>
@@ -919,33 +1143,43 @@ function SymbolCard({
           <div className="mb-2">
             <Label className="text-sm font-medium">Position monitoring</Label>
             <p className="text-muted-foreground text-xs">
-              Each tick the bot checks open positions. Take-profit and liquidation guards always run; these add a stop-loss and a max age.
+              Each tick the bot checks open positions. Take-profit and liquidation guards always
+              run; these add a stop-loss and a max age.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Field
               label="Stop-loss ROI % (≤ 0)"
               value={form.stop_loss_roi_pct}
-              onChange={(v) => setForm({ ...form, stop_loss_roi_pct: Math.min(0, parseFloat(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, stop_loss_roi_pct: Math.min(0, parseFloat(v) || 0) })
+              }
             />
             <Field
               label="Max position age (min, 0=off)"
               value={form.max_position_age_minutes}
-              onChange={(v) => setForm({ ...form, max_position_age_minutes: Math.max(0, parseInt(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, max_position_age_minutes: Math.max(0, parseInt(v) || 0) })
+              }
             />
             <Field
               label="Extreme-loss threshold (USDT, ≤ 0)"
               value={form.extreme_loss_threshold_usdt}
-              onChange={(v) => setForm({ ...form, extreme_loss_threshold_usdt: Math.min(0, parseFloat(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, extreme_loss_threshold_usdt: Math.min(0, parseFloat(v) || 0) })
+              }
             />
             <Field
               label="Cooldown after extreme loss (min, 0=off)"
               value={form.extreme_loss_cooldown_min}
-              onChange={(v) => setForm({ ...form, extreme_loss_cooldown_min: Math.max(0, parseInt(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, extreme_loss_cooldown_min: Math.max(0, parseInt(v) || 0) })
+              }
             />
           </div>
           <p className="text-muted-foreground mt-2 text-xs">
-            After any single fill realizes a loss at or below the threshold, new grid entries for this symbol pause for the cooldown window. Existing positions still exit normally.
+            After any single fill realizes a loss at or below the threshold, new grid entries for
+            this symbol pause for the cooldown window. Existing positions still exit normally.
           </p>
         </div>
 
@@ -956,7 +1190,8 @@ function SymbolCard({
                 Trend filter (don't fight the trend)
               </Label>
               <p className="text-muted-foreground text-xs">
-                Skips SELL entries in uptrends and BUY entries in downtrends, based on EMA over higher-TF candles. Exits for existing positions still run.
+                Skips SELL entries in uptrends and BUY entries in downtrends, based on EMA over
+                higher-TF candles. Exits for existing positions still run.
               </p>
             </div>
             <Switch
@@ -969,23 +1204,31 @@ function SymbolCard({
             <Field
               label="EMA period"
               value={form.trend_ema_period}
-              onChange={(v) => setForm({ ...form, trend_ema_period: Math.max(5, Math.min(500, parseInt(v) || 50)) })}
+              onChange={(v) =>
+                setForm({
+                  ...form,
+                  trend_ema_period: Math.max(5, Math.min(500, parseInt(v) || 50)),
+                })
+              }
             />
             <div>
               <Label className="text-xs">Interval</Label>
               <select
                 className="border-input bg-background mt-1 h-9 w-full rounded-md border px-2 text-sm"
                 value={form.trend_interval}
-                onChange={(e) => setForm({ ...form, trend_interval: e.target.value as typeof form.trend_interval })}
+                onChange={(e) =>
+                  setForm({ ...form, trend_interval: e.target.value as typeof form.trend_interval })
+                }
               >
                 {["15m", "30m", "1h", "2h", "4h", "1d"].map((i) => (
-                  <option key={i} value={i}>{i}</option>
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
                 ))}
               </select>
             </div>
           </div>
         </div>
-
 
         <div className="bg-muted/30 mt-4 rounded-md border p-3">
           <div className="mb-2 flex items-center justify-between">
@@ -994,7 +1237,9 @@ function SymbolCard({
                 Funding-rate filter
               </Label>
               <p className="text-muted-foreground text-xs">
-                Pauses new entries on the side that pays funding when the perpetual funding rate exceeds the threshold (1 bp = 0.01% per 8h). Existing positions and exits aren't affected.
+                Pauses new entries on the side that pays funding when the perpetual funding rate
+                exceeds the threshold (1 bp = 0.01% per 8h). Existing positions and exits aren't
+                affected.
               </p>
             </div>
             <Switch
@@ -1007,7 +1252,9 @@ function SymbolCard({
             <Field
               label="Max |funding| (bps / 8h)"
               value={form.funding_max_abs_bps}
-              onChange={(v) => setForm({ ...form, funding_max_abs_bps: Math.max(0, parseFloat(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, funding_max_abs_bps: Math.max(0, parseFloat(v) || 0) })
+              }
             />
           </div>
         </div>
@@ -1019,7 +1266,9 @@ function SymbolCard({
                 Z-score mean-reversion filter
               </Label>
               <p className="text-muted-foreground text-xs">
-                Pauses new entries unless price is stretched ≥ threshold std-devs from its rolling mean. Overbought (z &gt; +T) blocks new BUYs, oversold (z &lt; −T) blocks new SELLs, and |z| inside ±T blocks both (no edge).
+                Pauses new entries unless price is stretched ≥ threshold std-devs from its rolling
+                mean. Overbought (z &gt; +T) blocks new BUYs, oversold (z &lt; −T) blocks new SELLs,
+                and |z| inside ±T blocks both (no edge).
               </p>
             </div>
             <Switch
@@ -1032,29 +1281,35 @@ function SymbolCard({
             <Field
               label="Lookback (candles)"
               value={form.z_lookback}
-              onChange={(v) => setForm({ ...form, z_lookback: Math.max(5, Math.min(500, parseInt(v) || 20)) })}
+              onChange={(v) =>
+                setForm({ ...form, z_lookback: Math.max(5, Math.min(500, parseInt(v) || 20)) })
+              }
             />
             <div>
               <Label className="text-xs">Interval</Label>
               <select
                 className="border-input bg-background mt-1 h-9 w-full rounded-md border px-2 text-sm"
                 value={form.z_interval}
-                onChange={(e) => setForm({ ...form, z_interval: e.target.value as typeof form.z_interval })}
+                onChange={(e) =>
+                  setForm({ ...form, z_interval: e.target.value as typeof form.z_interval })
+                }
               >
                 {["15m", "30m", "1h", "2h", "4h", "1d"].map((i) => (
-                  <option key={i} value={i}>{i}</option>
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
                 ))}
               </select>
             </div>
             <Field
               label="Entry |z| threshold"
               value={form.z_entry_threshold}
-              onChange={(v) => setForm({ ...form, z_entry_threshold: Math.max(0, parseFloat(v) || 0) })}
+              onChange={(v) =>
+                setForm({ ...form, z_entry_threshold: Math.max(0, parseFloat(v) || 0) })
+              }
             />
           </div>
         </div>
-
-
 
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={() => onSave(form)}>Save</Button>
@@ -1065,7 +1320,11 @@ function SymbolCard({
             onClick={() => onTrade(form)}
           >
             <Power className="mr-2 h-4 w-4" />
-            {botRunning && form.enabled ? "Trading" : botRunning ? "Enable & trade" : "Start this symbol"}
+            {botRunning && form.enabled
+              ? "Trading"
+              : botRunning
+                ? "Enable & trade"
+                : "Start this symbol"}
           </Button>
 
           <Button
@@ -1114,13 +1373,20 @@ function SymbolCard({
             Cancel open orders
           </Button>
         </div>
-
       </CardContent>
     </Card>
   );
 }
 
-function Field({ label, value, onChange }: { label: string; value: string | number; onChange: (v: string) => void }) {
+function Field({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (v: string) => void;
+}) {
   return (
     <div>
       <Label className="text-xs">{label}</Label>
@@ -1129,7 +1395,10 @@ function Field({ label, value, onChange }: { label: string; value: string | numb
   );
 }
 
-interface CredsStatus { mainnet: boolean; testnet: boolean }
+interface CredsStatus {
+  mainnet: boolean;
+  testnet: boolean;
+}
 interface CredsInput {
   api_key?: string;
   api_secret?: string;
@@ -1151,8 +1420,8 @@ function BinanceKeysCard({
   const hasMainnetPair = !!vals.api_key?.trim() && !!vals.api_secret?.trim();
   const hasTestnetPair = !!vals.testnet_api_key?.trim() && !!vals.testnet_api_secret?.trim();
   const hasPartialPair =
-    (!!vals.api_key?.trim() !== !!vals.api_secret?.trim()) ||
-    (!!vals.testnet_api_key?.trim() !== !!vals.testnet_api_secret?.trim());
+    !!vals.api_key?.trim() !== !!vals.api_secret?.trim() ||
+    !!vals.testnet_api_key?.trim() !== !!vals.testnet_api_secret?.trim();
   return (
     <Card>
       <CardHeader>
@@ -1174,7 +1443,9 @@ function BinanceKeysCard({
             <Label className="text-xs">Testnet API secret</Label>
             <Input
               type="password"
-              placeholder={testnetSet ? "•••••••• (leave blank to keep)" : "Paste testnet API secret"}
+              placeholder={
+                testnetSet ? "•••••••• (leave blank to keep)" : "Paste testnet API secret"
+              }
               value={vals.testnet_api_secret ?? ""}
               onChange={(e) => setVals({ ...vals, testnet_api_secret: e.target.value })}
             />
@@ -1193,7 +1464,9 @@ function BinanceKeysCard({
             <Label className="text-xs">Mainnet API secret</Label>
             <Input
               type="password"
-              placeholder={mainnetSet ? "•••••••• (leave blank to keep)" : "Paste mainnet API secret"}
+              placeholder={
+                mainnetSet ? "•••••••• (leave blank to keep)" : "Paste mainnet API secret"
+              }
               value={vals.api_secret ?? ""}
               onChange={(e) => setVals({ ...vals, api_secret: e.target.value })}
             />
@@ -1227,9 +1500,13 @@ function BinanceKeysCard({
 
 function BinanceNetworkRouteCard({
   proxyConfigured,
+  proxySource,
+  serverPublicIp,
   vpnhoodRepoUrl = "https://github.com/vpnhood/vpnhood",
 }: {
   proxyConfigured: boolean;
+  proxySource?: string | null;
+  serverPublicIp?: string | null;
   vpnhoodRepoUrl?: string;
 }) {
   return (
@@ -1242,15 +1519,29 @@ function BinanceNetworkRouteCard({
           <div>
             <Label>VPN/proxy status</Label>
             <p className="text-xs text-muted-foreground">
-              Use this when Binance is blocked by the local provider. The bot reads <code>BINANCE_PROXY_URL</code> from the server environment.
+              Use this when Binance is blocked by the local provider. The bot reads{" "}
+              <code>BINANCE_PROXY_URL</code>, then standard <code>HTTPS_PROXY</code>/
+              <code>HTTP_PROXY</code>, from the server environment.
             </p>
           </div>
           <Badge variant={proxyConfigured ? "default" : "secondary"}>
-            {proxyConfigured ? "Proxy set" : "No proxy"}
+            {proxyConfigured ? `Proxy set${proxySource ? ` (${proxySource})` : ""}` : "No proxy"}
           </Badge>
         </div>
+        <div className="grid gap-1 rounded-md border bg-muted/20 p-3 text-xs">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">Server/VPN public IP</span>
+            <code>{serverPublicIp ?? "unknown"}</code>
+          </div>
+          <p className="text-muted-foreground">
+            If your Binance key has IP restrictions, this is the IP Binance must allow while the VPN
+            is on.
+          </p>
+        </div>
         <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-          For a free VPN route, Cloudflare WARP is the safest first option on macOS. Install the Cloudflare WARP app, turn WARP on, then restart this server. VpnHood is self-hosted; run its client on this machine, or expose a proxy route and set <code>BINANCE_PROXY_URL</code> in <code>.env.local</code>.
+          For a VPN route, the VPN must run on the same machine that runs this bot server.
+          Browser-only VPN extensions do not affect server-side Binance requests. After turning the
+          VPN on or changing proxy variables, restart the server.
         </div>
         <Button variant="outline" size="sm" asChild>
           <a href={vpnhoodRepoUrl} target="_blank" rel="noreferrer">

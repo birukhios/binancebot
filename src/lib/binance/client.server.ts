@@ -26,9 +26,9 @@ export function isBinanceAuthError(error: unknown) {
   // are NOT credential errors — testnet does not restrict by IP, so we let the
   // bot retry on the next loop instead of stopping it.
   return (
-    message.includes("\"code\":-2015") ||
-    message.includes("\"code\":-1022") ||
-    message.includes("\"code\":-2014") ||
+    message.includes('"code":-2015') ||
+    message.includes('"code":-1022') ||
+    message.includes('"code":-2014') ||
     message.includes("Invalid API-key, IP, or permissions") ||
     message.includes("Signature for this request is not valid") ||
     message.includes("signature is not valid") ||
@@ -55,7 +55,13 @@ function transientBinanceError(creds: BinanceCreds, method: string, path: string
   );
 }
 
-function cleanBinanceError(creds: BinanceCreds, method: string, path: string, status: number, body: string) {
+function cleanBinanceError(
+  creds: BinanceCreds,
+  method: string,
+  path: string,
+  status: number,
+  body: string,
+) {
   const network = creds.testnet ? "testnet" : "mainnet";
   const isHtml = /<!doctype html|<html|cloudfront|request blocked/i.test(body);
   if (isHtml) {
@@ -74,7 +80,7 @@ function cleanBinanceError(creds: BinanceCreds, method: string, path: string, st
   try {
     const parsed = JSON.parse(body) as { code?: number; msg?: string };
     if (parsed.code === -2015) {
-      return `Binance rejected the saved ${network} key: ${parsed.msg ?? "invalid API key, IP, or permissions"}. Update this account's ${network} API key and secret in Settings.`;
+      return `Binance rejected the saved ${network} key: ${parsed.msg ?? "invalid API key, IP, or permissions"}. If your VPN is on, Binance sees the VPN exit IP, not your home IP. Add the current VPN/server public IP to the API key allow-list, use a key without an IP restriction if Binance permits it, or switch the bot back to an allowed network.`;
     }
     if (parsed.code === -1022 || /signature/i.test(parsed.msg ?? "")) {
       return `Binance rejected the saved ${network} key/secret pair because the request signature is invalid. Re-enter both this account's ${network} API key and ${network} API secret together in Settings.`;
@@ -89,10 +95,10 @@ function cleanBinanceError(creds: BinanceCreds, method: string, path: string, st
 
 function envCreds(testnet: boolean): BinanceCreds | null {
   const apiKey = testnet
-    ? process.env.BINANCE_TESTNET_API_KEY ?? process.env.BINANCE_API_KEY
+    ? (process.env.BINANCE_TESTNET_API_KEY ?? process.env.BINANCE_API_KEY)
     : process.env.BINANCE_API_KEY;
   const apiSecret = testnet
-    ? process.env.BINANCE_TESTNET_API_SECRET ?? process.env.BINANCE_API_SECRET
+    ? (process.env.BINANCE_TESTNET_API_SECRET ?? process.env.BINANCE_API_SECRET)
     : process.env.BINANCE_API_SECRET;
   if (!apiKey || !apiSecret) return null;
   return { apiKey, apiSecret, testnet };
@@ -119,7 +125,8 @@ export async function getCredsForUser(userId: string, testnet: boolean): Promise
   const localCreds = localBinanceCredsForUser(userId);
   const localApiKey = testnet ? localCreds?.testnet_api_key : localCreds?.api_key;
   const localApiSecret = testnet ? localCreds?.testnet_api_secret : localCreds?.api_secret;
-  if (localApiKey && localApiSecret) return { apiKey: localApiKey, apiSecret: localApiSecret, testnet };
+  if (localApiKey && localApiSecret)
+    return { apiKey: localApiKey, apiSecret: localApiSecret, testnet };
 
   const { data } = await supabaseAdmin
     .from("user_binance_creds")
@@ -146,7 +153,12 @@ function base(creds: BinanceCreds) {
 }
 
 function binanceProxyDispatcher() {
-  const url = process.env.BINANCE_PROXY_URL?.trim();
+  const url =
+    process.env.BINANCE_PROXY_URL?.trim() ||
+    process.env.https_proxy?.trim() ||
+    process.env.HTTPS_PROXY?.trim() ||
+    process.env.http_proxy?.trim() ||
+    process.env.HTTP_PROXY?.trim();
   if (!url) return undefined;
   if (!proxyAgentCache || proxyAgentCache.url !== url) {
     proxyAgentCache = { url, agent: new ProxyAgent(url) };
@@ -154,9 +166,21 @@ function binanceProxyDispatcher() {
   return proxyAgentCache.agent;
 }
 
+export function binanceProxySource() {
+  if (process.env.BINANCE_PROXY_URL?.trim()) return "BINANCE_PROXY_URL";
+  if (process.env.https_proxy?.trim()) return "https_proxy";
+  if (process.env.HTTPS_PROXY?.trim()) return "HTTPS_PROXY";
+  if (process.env.http_proxy?.trim()) return "http_proxy";
+  if (process.env.HTTP_PROXY?.trim()) return "HTTP_PROXY";
+  return null;
+}
+
 function binanceFetch(input: string | URL, init: RequestInit = {}) {
   const dispatcher = binanceProxyDispatcher();
-  return fetch(input, dispatcher ? ({ ...init, dispatcher } as RequestInit & { dispatcher: ProxyAgent }) : init);
+  return fetch(
+    input,
+    dispatcher ? ({ ...init, dispatcher } as RequestInit & { dispatcher: ProxyAgent }) : init,
+  );
 }
 
 const serverTimeOffsetCache = new Map<string, { offsetMs: number; expiresAt: number }>();
@@ -207,11 +231,21 @@ function stepDecimals(step: string | number | undefined) {
 
 function bybitInterval(interval: string | number | undefined) {
   const value = String(interval ?? "1h");
-  const map: Record<string, string> = { "15m": "15", "30m": "30", "1h": "60", "2h": "120", "4h": "240", "1d": "D" };
+  const map: Record<string, string> = {
+    "15m": "15",
+    "30m": "30",
+    "1h": "60",
+    "2h": "120",
+    "4h": "240",
+    "1d": "D",
+  };
   return map[value] ?? value.replace(/m$/, "").replace("h", "60").replace("d", "D");
 }
 
-async function bybitJson<T>(path: string, params: Record<string, string | number | undefined> = {}) {
+async function bybitJson<T>(
+  path: string,
+  params: Record<string, string | number | undefined> = {},
+) {
   const query = qs(params);
   const res = await fetch(`https://api.bybit.com${path}${query ? `?${query}` : ""}`, {
     headers: { "user-agent": "crypto-caddie-demo/1.0" },
@@ -224,7 +258,11 @@ async function bybitJson<T>(path: string, params: Record<string, string | number
   return json as T;
 }
 
-async function demoMarketFallback<T>(path: string, params: Record<string, string | number>, originalError: Error): Promise<T> {
+async function demoMarketFallback<T>(
+  path: string,
+  params: Record<string, string | number>,
+  originalError: Error,
+): Promise<T> {
   // In demo/testnet mode, keep using real market prices even when Binance's
   // unauthenticated testnet market-data edge blocks this cloud runtime.
   try {
@@ -235,7 +273,8 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
     });
     const text = await res.text();
     if (res.ok) return JSON.parse(text) as T;
-    if (!networkBlocked(res.status, text)) throw new Error(`Binance ${path} ${res.status}: ${text.slice(0, 160)}`);
+    if (!networkBlocked(res.status, text))
+      throw new Error(`Binance ${path} ${res.status}: ${text.slice(0, 160)}`);
   } catch {
     // Fall through to the non-Binance market-data mirror below.
   }
@@ -257,7 +296,9 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
   }
 
   if (path === "/fapi/v1/premiumIndex") {
-    const data = await bybitJson<{ result: { list: any[] } }>("/v5/market/tickers", { category: "linear" });
+    const data = await bybitJson<{ result: { list: any[] } }>("/v5/market/tickers", {
+      category: "linear",
+    });
     return (data.result.list ?? []).map((row) => ({
       symbol: row.symbol,
       markPrice: row.markPrice ?? row.lastPrice,
@@ -277,18 +318,34 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
     return (data.result.list ?? [])
       .slice()
       .reverse()
-      .map((k) => [Number(k[0]), k[1], k[2], k[3], k[4], k[5], Number(k[0]), k[6] ?? "0", 0, "0", "0", "0"]) as T;
+      .map((k) => [
+        Number(k[0]),
+        k[1],
+        k[2],
+        k[3],
+        k[4],
+        k[5],
+        Number(k[0]),
+        k[6] ?? "0",
+        0,
+        "0",
+        "0",
+        "0",
+      ]) as T;
   }
 
   if (path === "/fapi/v1/exchangeInfo") {
     const pages: any[] = [];
     let cursor: string | undefined;
     do {
-      const data = await bybitJson<{ result: { list: any[]; nextPageCursor?: string } }>("/v5/market/instruments-info", {
-        category: "linear",
-        limit: 1000,
-        cursor,
-      });
+      const data = await bybitJson<{ result: { list: any[]; nextPageCursor?: string } }>(
+        "/v5/market/instruments-info",
+        {
+          category: "linear",
+          limit: 1000,
+          cursor,
+        },
+      );
       pages.push(...(data.result.list ?? []));
       cursor = data.result.nextPageCursor || undefined;
     } while (cursor);
@@ -302,7 +359,11 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
           quantityPrecision: stepDecimals(stepSize),
           filters: [
             { filterType: "PRICE_FILTER", tickSize },
-            { filterType: "LOT_SIZE", stepSize, minQty: row.lotSizeFilter?.minOrderQty ?? stepSize },
+            {
+              filterType: "LOT_SIZE",
+              stepSize,
+              minQty: row.lotSizeFilter?.minOrderQty ?? stepSize,
+            },
             { filterType: "MIN_NOTIONAL", notional: row.lotSizeFilter?.minNotionalValue ?? "5" },
           ],
         };
@@ -313,7 +374,11 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
   throw originalError;
 }
 
-async function publicReq<T>(creds: BinanceCreds, path: string, params: Record<string, string | number> = {}): Promise<T> {
+async function publicReq<T>(
+  creds: BinanceCreds,
+  path: string,
+  params: Record<string, string | number> = {},
+): Promise<T> {
   const url = `${base(creds)}${path}${Object.keys(params).length ? "?" + qs(params) : ""}`;
   let res: Response;
   try {
@@ -333,7 +398,8 @@ async function publicReq<T>(creds: BinanceCreds, path: string, params: Record<st
         ? `Binance ${path} ${res.status}: demo market-data request was blocked by Binance's network/security layer.`
         : `Binance ${path} ${res.status}: ${text.slice(0, 260)}`,
     );
-    if (creds.testnet && networkBlocked(res.status, text)) return demoMarketFallback<T>(path, params, error);
+    if (creds.testnet && networkBlocked(res.status, text))
+      return demoMarketFallback<T>(path, params, error);
     throw error;
   }
   return res.json() as Promise<T>;
@@ -346,7 +412,11 @@ async function signedReq<T>(
   params: Record<string, string | number | boolean | undefined> = {},
 ): Promise<T> {
   const makeRequest = async (forceTimeRefresh = false) => {
-    const full = { ...params, timestamp: await serverTimestamp(creds, forceTimeRefresh), recvWindow: 60_000 };
+    const full = {
+      ...params,
+      timestamp: await serverTimestamp(creds, forceTimeRefresh),
+      recvWindow: 60_000,
+    };
     const query = qs(full);
     const sig = sign(creds.apiSecret, query);
     const url = `${base(creds)}${path}?${query}&signature=${sig}`;
@@ -355,7 +425,9 @@ async function signedReq<T>(
       res = await binanceFetch(url, {
         method,
         headers: { "X-MBX-APIKEY": creds.apiKey, "user-agent": "crypto-caddie-demo/1.0" },
-        signal: AbortSignal.timeout(method === "GET" ? BINANCE_READ_TIMEOUT_MS : BINANCE_WRITE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(
+          method === "GET" ? BINANCE_READ_TIMEOUT_MS : BINANCE_WRITE_TIMEOUT_MS,
+        ),
       });
     } catch (e) {
       throw transientBinanceError(creds, method, path, e);
@@ -369,7 +441,10 @@ async function signedReq<T>(
     const responseMs = responseDate ? Date.parse(responseDate) : NaN;
     if (Number.isFinite(responseMs)) {
       const host = base(creds);
-      serverTimeOffsetCache.set(host, { offsetMs: responseMs - Date.now(), expiresAt: Date.now() + 60_000 });
+      serverTimeOffsetCache.set(host, {
+        offsetMs: responseMs - Date.now(),
+        expiresAt: Date.now() + 60_000,
+      });
       ({ res, text } = await makeRequest(false));
     } else {
       ({ res, text } = await makeRequest(true));
@@ -427,7 +502,10 @@ function isTransientBinanceNetworkError(error: unknown) {
 
 async function fallbackPositionRiskFromAccount(creds: BinanceCreds, symbol?: string) {
   const acct = await signedReq<AccountInfo>(creds, "GET", "/fapi/v2/account");
-  const marks = await publicReq<Array<{ symbol: string; markPrice: string }>>(creds, "/fapi/v1/premiumIndex").catch(() => []);
+  const marks = await publicReq<Array<{ symbol: string; markPrice: string }>>(
+    creds,
+    "/fapi/v1/premiumIndex",
+  ).catch(() => []);
   const markBySymbol = new Map(marks.map((m) => [m.symbol, m.markPrice]));
   return acct.positions
     .filter((p) => !symbol || p.symbol === symbol)
@@ -439,7 +517,11 @@ async function fallbackPositionRiskFromAccount(creds: BinanceCreds, symbol?: str
       marginType: p.isolated ? "isolated" : "cross",
       isolatedMargin: "0",
       isolatedWallet: "0",
-      notional: String(Math.abs(Number(p.positionAmt ?? 0) * Number(markBySymbol.get(p.symbol) ?? p.entryPrice ?? 0))),
+      notional: String(
+        Math.abs(
+          Number(p.positionAmt ?? 0) * Number(markBySymbol.get(p.symbol) ?? p.entryPrice ?? 0),
+        ),
+      ),
     }));
 }
 
@@ -448,9 +530,17 @@ export const binance = {
   serverTime: (c: BinanceCreds) => publicReq<{ serverTime: number }>(c, "/fapi/v1/time"),
   exchangeInfo: (c: BinanceCreds) => publicReq<{ symbols: any[] }>(c, "/fapi/v1/exchangeInfo"),
   markPrice: (c: BinanceCreds, symbol: string) =>
-    publicReq<{ symbol: string; markPrice: string; indexPrice: string; lastFundingRate: string; nextFundingTime: number }>(c, "/fapi/v1/premiumIndex", { symbol }),
+    publicReq<{
+      symbol: string;
+      markPrice: string;
+      indexPrice: string;
+      lastFundingRate: string;
+      nextFundingTime: number;
+    }>(c, "/fapi/v1/premiumIndex", { symbol }),
   premiumIndexAll: (c: BinanceCreds) =>
-    publicReq<Array<{ symbol: string; markPrice: string; lastFundingRate: string; nextFundingTime: number }>>(c, "/fapi/v1/premiumIndex"),
+    publicReq<
+      Array<{ symbol: string; markPrice: string; lastFundingRate: string; nextFundingTime: number }>
+    >(c, "/fapi/v1/premiumIndex"),
   klines: (c: BinanceCreds, symbol: string, interval: string, limit = 100) =>
     publicReq<any[][]>(c, "/fapi/v1/klines", { symbol, interval, limit }),
 
@@ -477,8 +567,20 @@ export const binance = {
     signedReq<any[]>(c, "GET", "/fapi/v1/userTrades", { symbol, fromId, limit }),
   income: (
     c: BinanceCreds,
-    params: { symbol?: string; incomeType?: string; startTime?: number; endTime?: number; limit?: number } = {},
-  ) => signedReq<Array<{ symbol: string; incomeType: string; income: string; time: number }>>(c, "GET", "/fapi/v1/income", params),
+    params: {
+      symbol?: string;
+      incomeType?: string;
+      startTime?: number;
+      endTime?: number;
+      limit?: number;
+    } = {},
+  ) =>
+    signedReq<Array<{ symbol: string; incomeType: string; income: string; time: number }>>(
+      c,
+      "GET",
+      "/fapi/v1/income",
+      params,
+    ),
 
   setLeverage: (c: BinanceCreds, symbol: string, leverage: number) =>
     signedReq<{ leverage: number }>(c, "POST", "/fapi/v1/leverage", { symbol, leverage }),
@@ -498,10 +600,15 @@ export const binance = {
       newClientOrderId?: string;
     },
   ) =>
-    signedReq<{ orderId: number; clientOrderId: string; status: string }>(c, "POST", "/fapi/v1/order", {
-      ...p,
-      timeInForce: p.type === "LIMIT" ? (p.timeInForce ?? "GTC") : undefined,
-    }),
+    signedReq<{ orderId: number; clientOrderId: string; status: string }>(
+      c,
+      "POST",
+      "/fapi/v1/order",
+      {
+        ...p,
+        timeInForce: p.type === "LIMIT" ? (p.timeInForce ?? "GTC") : undefined,
+      },
+    ),
 
   cancelOrder: (c: BinanceCreds, symbol: string, orderId: number) =>
     signedReq<any>(c, "DELETE", "/fapi/v1/order", { symbol, orderId }),
