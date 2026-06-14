@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const clientDir = join(rootDir, "dist", "client");
+const serverBundle = join(rootDir, "dist", "server", "server.js");
+
+if (!existsSync(serverBundle)) {
+  throw new Error(
+    "Missing dist/server/server.js. Run `npm run build` before `npm run start`, or use the package.json start script so prestart can build it.",
+  );
+}
+
 const serverEntry = await import("../dist/server/server.js");
 const handler = serverEntry.default?.fetch ?? serverEntry.fetch;
 
