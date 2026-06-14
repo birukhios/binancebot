@@ -7,6 +7,7 @@ This app needs a Render Web Service, not GitHub Pages, because it uses server-si
 - Repository: `birukhios/binancebot`
 - Build command: `npm ci && npm run build`
 - Start command: `npm run start`
+- Health check path: `/healthz`
 - Runtime: Node
 
 ## Required Environment Variables

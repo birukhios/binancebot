@@ -82,6 +82,13 @@ async function toWebRequest(req) {
 
 const server = createServer(async (req, res) => {
   try {
+    const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "render.local"}`);
+    if (reqUrl.pathname === "/healthz") {
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end("ok");
+      return;
+    }
+
     if (await serveStatic(req, res)) return;
 
     const response = await handler(await toWebRequest(req), {}, {});
