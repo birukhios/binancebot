@@ -6,7 +6,9 @@ import { dash } from "@better-auth/infra";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 import Database from "better-sqlite3";
 
-const dbPath = resolve(process.env.BETTER_AUTH_DB_PATH ?? "./data/auth.sqlite");
+const dbPath = resolve(
+  process.env.BETTER_AUTH_DB_PATH ?? (process.env.VERCEL ? "/tmp/auth.sqlite" : "./data/auth.sqlite"),
+);
 mkdirSync(dirname(dbPath), { recursive: true });
 
 export const auth = betterAuth({

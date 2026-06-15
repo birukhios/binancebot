@@ -11,5 +11,6 @@ This app can run on Vercel as a server-backed deployment.
 ## Notes
 
 - `vite.config.ts` pins Nitro to the `vercel` preset, so the build emits Vercel-ready output.
+- Set `BETTER_AUTH_DB_PATH=/tmp/auth.sqlite` in Vercel so the auth DB uses writable serverless storage.
 - Keep the same environment variables you use locally for auth and Binance access.
-- Vercel works best with external auth/storage; the current SQLite auth path is good for local use only.
+- Vercel still treats that SQLite file as ephemeral, so login state can reset on redeploys.
