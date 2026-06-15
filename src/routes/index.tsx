@@ -150,7 +150,7 @@ function Dashboard() {
     },
   });
 
-  if (session.isPending) return <div className="p-8 text-muted-foreground">Loading…</div>;
+  if (session.isPending) return <AuthPage />;
   if (!authChecked) return <AuthPage />;
   if (dash.isError) {
     const message =
@@ -188,7 +188,26 @@ function Dashboard() {
       </div>
     );
   }
-  if (dash.isLoading) return <div className="p-8 text-muted-foreground">Loading bot…</div>;
+  if (dash.isLoading)
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-xl">
+          <CardHeader>
+            <CardTitle>Connecting to Binance</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The app is signed in, and it is now waiting on Binance data. If your Binance network
+              is blocked on this machine, turn on the VPN or set your proxy, then reload.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              You do not need the VPN to reach the login screen. You only need it for Binance API
+              calls after sign-in.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
 
   const cfg = dash.data?.cfg;
   const account = dash.data?.account;
