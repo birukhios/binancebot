@@ -20,7 +20,6 @@ export default defineConfig({
         runtime: "nodejs22.x",
         maxDuration: 60,
         memory: 1024,
-        supportsResponseStreaming: true,
       },
       functionRules: {
         "/**": {
