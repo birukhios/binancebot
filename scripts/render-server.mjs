@@ -10,7 +10,11 @@ const serverBundle = join(rootDir, "dist", "server", "server.js");
 
 if (!existsSync(serverBundle)) {
   throw new Error(
-    "Missing dist/server/server.js. Run `npm run build` before `npm run start`, or use the package.json start script so prestart can build it.",
+    [
+      "Missing dist/server/server.js.",
+      "Render must run the build command before start: `npm ci && npm run render:build`.",
+      "Then start the service with: `npm run start`.",
+    ].join(" "),
   );
 }
 

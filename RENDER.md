@@ -10,6 +10,10 @@ This app needs a Render Web Service, not GitHub Pages, because it uses server-si
 - Health check path: `/healthz`
 - Runtime: Node
 
+If the deploy log says `Missing dist/server/server.js`, Render started the service without
+running the build command above, or it deployed an older commit/service configuration. Update
+the service settings, clear the build cache, and redeploy the latest `main` commit.
+
 ## Required Environment Variables
 
 Set these in Render after creating the service:
