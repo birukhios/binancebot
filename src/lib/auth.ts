@@ -6,6 +6,12 @@ import { betterAuth } from "better-auth";
 import { dash } from "@better-auth/infra";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
+function resolveAuthBaseURL() {
+  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return `http://127.0.0.1:${process.env.PORT ?? "8080"}`;
+}
+
 const dbPath = resolve(
   process.env.BETTER_AUTH_DB_PATH ?? (process.env.VERCEL ? "/tmp/auth.sqlite" : "./data/auth.sqlite"),
 );
@@ -17,7 +23,7 @@ const database = process.env.VERCEL
   : (await import("better-sqlite3")).default;
 
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://127.0.0.1:5173",
+  baseURL: resolveAuthBaseURL(),
   secret:
     process.env.BETTER_AUTH_SECRET ??
     "local-development-better-auth-secret-change-before-production",
