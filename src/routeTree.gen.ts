@@ -13,7 +13,6 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiPublicBotTickRouteImport } from './routes/api/public/bot-tick'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as AuthApiAuthSplatRouteImport } from './routes/auth/api/auth/$'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -35,61 +34,37 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthApiAuthSplatRoute = AuthApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => AuthRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
-  '/auth/api/auth/$': typeof AuthApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
-  '/auth/api/auth/$': typeof AuthApiAuthSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
-  '/auth/api/auth/$': typeof AuthApiAuthSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/auth'
-    | '/api/auth/$'
-    | '/api/public/bot-tick'
-    | '/auth/api/auth/$'
+  fullPaths: '/' | '/auth' | '/api/auth/$' | '/api/public/bot-tick'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/auth'
-    | '/api/auth/$'
-    | '/api/public/bot-tick'
-    | '/auth/api/auth/$'
-  id:
-    | '__root__'
-    | '/'
-    | '/auth'
-    | '/api/auth/$'
-    | '/api/public/bot-tick'
-    | '/auth/api/auth/$'
+  to: '/' | '/auth' | '/api/auth/$' | '/api/public/bot-tick'
+  id: '__root__' | '/' | '/auth' | '/api/auth/$' | '/api/public/bot-tick'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AuthRoute: typeof AuthRouteWithChildren
+  AuthRoute: typeof AuthRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPublicBotTickRoute: typeof ApiPublicBotTickRoute
 }
@@ -124,29 +99,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/api/auth/$': {
-      id: '/auth/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/auth/api/auth/$'
-      preLoaderRoute: typeof AuthApiAuthSplatRouteImport
-      parentRoute: typeof AuthRoute
-    }
   }
 }
 
-interface AuthRouteChildren {
-  AuthApiAuthSplatRoute: typeof AuthApiAuthSplatRoute
-}
-
-const AuthRouteChildren: AuthRouteChildren = {
-  AuthApiAuthSplatRoute: AuthApiAuthSplatRoute,
-}
-
-const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AuthRoute: AuthRouteWithChildren,
+  AuthRoute: AuthRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPublicBotTickRoute: ApiPublicBotTickRoute,
 }
