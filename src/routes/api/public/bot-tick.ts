@@ -22,10 +22,6 @@ export const Route = createFileRoute("/api/public/bot-tick")({
     handlers: {
       POST: async ({ request }) => {
         const secret = process.env.BOT_TICK_SECRET;
-        const publishableKey =
-          process.env.SUPABASE_PUBLISHABLE_KEY ??
-          process.env.SUPABASE_ANON_KEY ??
-          process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
         const provided =
           request.headers.get("x-bot-tick-secret") ??
           request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
@@ -39,7 +35,7 @@ export const Route = createFileRoute("/api/public/bot-tick")({
           return a.length === b.length && timingSafeEqual(a, b);
         };
 
-        if (!matches(secret) && !matches(publishableKey)) {
+        if (!matches(secret)) {
           return new Response("Unauthorized", { status: 401 });
         }
 

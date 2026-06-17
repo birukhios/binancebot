@@ -35,6 +35,30 @@ interface SymbolCfg {
   single_grid_order?: boolean | null;
 }
 
+function closeTargetPrice(
+  entryPrice: number,
+  positionAmt: number,
+  spacingPct: number,
+  feePctBuffer: number,
+) {
+  const netPct = Math.max(spacingPct + feePctBuffer, feePctBuffer);
+  return positionAmt > 0
+    ? entryPrice * (1 + netPct / 100)
+    : entryPrice * (1 - netPct / 100);
+}
+
+function stopLossTargetPrice(
+  entryPrice: number,
+  positionAmt: number,
+  stopLossRoiPct: number,
+  leverage: number,
+) {
+  const lossPct = Math.max(0, Math.abs(stopLossRoiPct)) / Math.max(leverage, 1);
+  return positionAmt > 0
+    ? entryPrice * (1 - lossPct / 100)
+    : entryPrice * (1 + lossPct / 100);
+}
+
 // EMA of the last N closes. Returns null if not enough data.
 function ema(values: number[], period: number): number | null {
   if (values.length < period) return null;
@@ -715,12 +739,16 @@ async function reconcileSymbolLocked(
   // Also captures inventory for the inventory-relative skew below.
   let positionAmt = 0;
   let positionNotional = 0;
+  let positionEntryPrice = 0;
+  let positionLeverage = Math.max(1, Number(cfg.leverage ?? 1));
   try {
     const positions = await binance.positionRisk(creds, cfg.symbol);
     const pos = positions.find((p: any) => p.symbol === cfg.symbol && Number(p.positionAmt) !== 0);
     if (pos) {
       const amt = Number(pos.positionAmt);
       positionAmt = amt;
+      positionEntryPrice = Number(pos.entryPrice) || mark;
+      positionLeverage = Math.max(1, Number(pos.leverage) || Number(cfg.leverage) || 1);
       positionNotional = Math.abs(amt) * (Number(pos.markPrice) || mark);
       // One-position-per-symbol rule: never add to an existing position.
       // Only keep opposite-side maker exits live so the grid can close it.
@@ -761,18 +789,29 @@ async function reconcileSymbolLocked(
     (cfg.lower_bound && mark < cfg.lower_bound) ||
     (cfg.upper_bound && mark > cfg.upper_bound);
   if (outOfRange) {
-    await botLog(
-      userId,
-      "warn",
-      `Price ${mark} outside grid range [${cfg.lower_bound ?? "-"}, ${cfg.upper_bound ?? "-"}]. Closing position and cancelling orders.`,
-      cfg.symbol,
-    );
-    try {
-      await closePositionAndCancel(userId, creds, cfg.symbol);
-    } catch (e) {
-      await botLog(userId, "error", `out-of-range close: ${(e as Error).message}`, cfg.symbol);
+    if (positionAmt !== 0) {
+      blockBuyAdds = true;
+      blockSellAdds = true;
+      await botLog(
+        userId,
+        "warn",
+        `Price ${mark} is outside grid range [${cfg.lower_bound ?? "-"}, ${cfg.upper_bound ?? "-"}]. Keeping the open position in exit-only mode and not placing new entries.`,
+        cfg.symbol,
+      );
+    } else {
+      await botLog(
+        userId,
+        "warn",
+        `Price ${mark} outside grid range [${cfg.lower_bound ?? "-"}, ${cfg.upper_bound ?? "-"}]. Closing position and cancelling orders.`,
+        cfg.symbol,
+      );
+      try {
+        await closePositionAndCancel(userId, creds, cfg.symbol);
+      } catch (e) {
+        await botLog(userId, "error", `out-of-range close: ${(e as Error).message}`, cfg.symbol);
+      }
+      return;
     }
-    return;
   }
 
   try {
@@ -843,21 +882,71 @@ async function reconcileSymbolLocked(
     cfg.symbol,
   );
 
-  const desired: Array<{ side: "BUY" | "SELL"; price: number; level: number }> = [];
+  const desired: Array<{ side: "BUY" | "SELL"; price: number; level: number; quantity: number; reduceOnly?: boolean }> = [];
+  const protective: Array<{
+    clientOrderId: string;
+    side: "BUY" | "SELL";
+    type: "STOP";
+    stopPrice: number;
+    quantity: number;
+  }> = [];
   const levels = cfg.single_grid_order ? 1 : cfg.grid_levels;
+
+  // When a position is open, always keep one explicit reduce-only take-profit
+  // resting off the actual entry price instead of the adaptive grid center.
+  // That gives the bot a deterministic closing plan even if mark/center shifts
+  // around after entry.
+  if (positionAmt !== 0 && positionEntryPrice > 0) {
+    const feePctBuffer = 0.10; // cover round-trip fees/slippage before net profit target
+    const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
+    if (closeQty >= f.minQty) {
+      const tpPx = roundStep(
+        closeTargetPrice(positionEntryPrice, positionAmt, cfg.grid_spacing_pct, feePctBuffer),
+        f.tickSize,
+        f.pricePrecision,
+      );
+      if (positionAmt > 0) {
+        desired.push({ side: "SELL", price: tpPx, level: 1, quantity: closeQty, reduceOnly: true });
+      } else {
+        desired.push({ side: "BUY", price: tpPx, level: -1, quantity: closeQty, reduceOnly: true });
+      }
+
+      const stopRoi = Number(cfg.stop_loss_roi_pct ?? 0);
+      if (stopRoi < 0) {
+        const stopPx = roundStep(
+          stopLossTargetPrice(positionEntryPrice, positionAmt, stopRoi, positionLeverage),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        protective.push({
+          clientOrderId: `protect_sl_${cfg.symbol}`,
+          side: positionAmt > 0 ? "SELL" : "BUY",
+          type: "STOP",
+          stopPrice: stopPx,
+          quantity: closeQty,
+        });
+      }
+    }
+  }
+
   for (let i = 1; i <= levels; i++) {
     const buySpacing = (baseSpacing * volMult * sessMult * buySkew / 100) * i;
     const sellSpacing = (baseSpacing * volMult * sessMult * sellSkew / 100) * i;
     const buyPx = roundStep(center * (1 - buySpacing), f.tickSize, f.pricePrecision);
     const sellPx = roundStep(center * (1 + sellSpacing), f.tickSize, f.pricePrecision);
     if (cfg.single_grid_order) {
-      if (positionAmt > 0 && !blockSellAdds) desired.push({ side: "SELL", price: sellPx, level: i });
-      else if (positionAmt < 0 && !blockBuyAdds) desired.push({ side: "BUY", price: buyPx, level: -i });
-      else if (!blockBuyAdds) desired.push({ side: "BUY", price: buyPx, level: -i });
-      else if (!blockSellAdds) desired.push({ side: "SELL", price: sellPx, level: i });
+      if (positionAmt > 0 && !blockSellAdds) {
+        // Dedicated entry-price TP above already owns the close plan.
+      } else if (positionAmt < 0 && !blockBuyAdds) {
+        // Dedicated entry-price TP above already owns the close plan.
+      } else if (!blockBuyAdds) {
+        desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+      } else if (!blockSellAdds) {
+        desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+      }
     } else {
-      if (!blockBuyAdds) desired.push({ side: "BUY", price: buyPx, level: -i });
-      if (!blockSellAdds) desired.push({ side: "SELL", price: sellPx, level: i });
+      if (!blockBuyAdds) desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+      if (!blockSellAdds && positionAmt === 0) desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
     }
   }
 
@@ -898,10 +987,22 @@ async function reconcileSymbolLocked(
     }
     throw e;
   });
+  const openAlgo = await binance.openAlgoOrders(creds, cfg.symbol).catch((e) => {
+    if (creds.testnet && isBinanceNetworkBlock(e)) {
+      return [];
+    }
+    throw e;
+  });
   const liveByLevel = new Map<string, any>();
+  const liveProtective = new Map<string, any>();
   for (const o of open) {
     if (o.clientOrderId?.startsWith(`grid_${cfg.symbol}_`)) {
       liveByLevel.set(o.clientOrderId, o);
+    }
+  }
+  for (const o of openAlgo) {
+    if (o.clientAlgoId?.startsWith(`protect_`)) {
+      liveProtective.set(o.clientAlgoId, o);
     }
   }
 
@@ -921,17 +1022,42 @@ async function reconcileSymbolLocked(
     }
   }
 
+  const desiredProtectiveCids = new Set(protective.map((p) => p.clientOrderId));
+  for (const [cid, o] of liveProtective.entries()) {
+    if (!desiredProtectiveCids.has(cid)) {
+      try {
+        await binance.cancelAlgoOrder(creds, cid);
+      } catch (e) {
+        await botLog(userId, "warn", `cancel protective ${cid}: ${(e as Error).message}`, cfg.symbol);
+      }
+    }
+  }
+
   for (const d of desired) {
     const cid = `grid_${cfg.symbol}_${d.level}`;
-    if (liveByLevel.has(cid)) continue;
+    const live = liveByLevel.get(cid);
+    if (live) {
+      const livePx = Number(live.price ?? 0);
+      const liveQty = Number(live.origQty ?? 0);
+      const samePrice = Math.abs(livePx - d.price) < Math.max(f.tickSize / 2, 1e-9);
+      const sameQty = Math.abs(liveQty - d.quantity) < Math.max(f.stepSize / 2, 1e-9);
+      if (samePrice && sameQty) continue;
+      try {
+        await binance.cancelOrder(creds, cfg.symbol, live.orderId);
+      } catch (e) {
+        await botLog(userId, "warn", `replace-cancel ${live.orderId}: ${(e as Error).message}`, cfg.symbol);
+        continue;
+      }
+    }
     try {
       const placed = await binance.placeOrder(creds, {
         symbol: cfg.symbol,
         side: d.side,
         type: "LIMIT",
-        quantity: qty,
+        quantity: d.quantity,
         price: d.price,
         timeInForce: "GTC",
+        reduceOnly: d.reduceOnly,
         newClientOrderId: cid,
       });
       await supabaseAdmin.from("grid_orders").insert({
@@ -939,17 +1065,65 @@ async function reconcileSymbolLocked(
         symbol: cfg.symbol,
         side: d.side,
         price: d.price,
-        qty,
+        qty: d.quantity,
         binance_order_id: placed.orderId,
         client_order_id: cid,
         status: placed.status,
         level_index: d.level,
       });
+      if (d.reduceOnly) {
+        await botLog(
+          userId,
+          "info",
+          `Attached take-profit ${d.side} ${d.quantity} @ ${d.price}.`,
+          cfg.symbol,
+        );
+      }
     } catch (e) {
       const msg = (e as Error).message;
       if (!msg.includes("immediately match") && !msg.includes("-2010")) {
         await botLog(userId, "warn", `place ${d.side}@${d.price}: ${msg}`, cfg.symbol);
       }
+    }
+  }
+
+  for (const p of protective) {
+    const live = liveProtective.get(p.clientOrderId);
+    if (live) {
+      const liveStop = Number(live.triggerPrice ?? live.stopPrice ?? 0);
+      const sameStop = Math.abs(liveStop - p.stopPrice) < Math.max(f.tickSize / 2, 1e-9);
+      const sameSide = String(live.side) === p.side;
+      const sameType = String(live.type) === p.type;
+      if (sameStop && sameSide && sameType) continue;
+      try {
+        await binance.cancelAlgoOrder(creds, p.clientOrderId);
+      } catch (e) {
+        await botLog(userId, "warn", `replace protective ${p.clientOrderId}: ${(e as Error).message}`, cfg.symbol);
+        continue;
+      }
+    }
+
+    try {
+      await binance.placeAlgoOrder(creds, {
+        symbol: cfg.symbol,
+        side: p.side,
+        type: p.type,
+        quantity: p.quantity,
+        price: p.stopPrice,
+        triggerPrice: p.stopPrice,
+        workingType: "MARK_PRICE",
+        reduceOnly: true,
+        timeInForce: "GTC",
+        clientAlgoId: p.clientOrderId,
+      });
+      await botLog(
+        userId,
+        "info",
+        `Attached stop-loss ${p.side} stop-limit @ ${p.stopPrice}.`,
+        cfg.symbol,
+      );
+    } catch (e) {
+      await botLog(userId, "warn", `place protective ${p.side} stop@${p.stopPrice}: ${(e as Error).message}`, cfg.symbol);
     }
   }
 }

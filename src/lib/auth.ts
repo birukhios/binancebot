@@ -59,10 +59,13 @@ const dbPath = resolve(
 );
 mkdirSync(dirname(dbPath), { recursive: true });
 const memoryDb = (globalThis as typeof globalThis & { __authMemoryDb?: Record<string, any[]> }).__authMemoryDb ??= {};
-
-const database = process.env.VERCEL
-  ? memoryAdapter(memoryDb)
-  : (await import("better-sqlite3")).default;
+let database: ReturnType<typeof memoryAdapter> | any;
+if (process.env.VERCEL) {
+  database = memoryAdapter(memoryDb);
+} else {
+  const sqliteModule = await import("better-sqlite3");
+  database = new sqliteModule.default(dbPath);
+}
 
 export const auth = betterAuth({
   baseURL: resolveAuthBaseURL(),
@@ -70,7 +73,7 @@ export const auth = betterAuth({
   secret:
     process.env.BETTER_AUTH_SECRET ??
     "local-development-better-auth-secret-change-before-production",
-  database: process.env.VERCEL ? database : new database(dbPath),
+  database,
   emailAndPassword: {
     enabled: true,
   },

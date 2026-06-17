@@ -1,6 +1,6 @@
 import { binance, getCredsForUser } from "@/lib/binance/client.server";
 import { reconcileSymbol } from "@/lib/binance/grid.server";
-import { addLocalLog, getLocalBotState, listLocalBotUserIds, updateLocalBotConfig } from "@/lib/bot/local-bot-store.server";
+import { addLocalLog, getLocalBotState, listLocalBotUserIds, updateLocalBotConfig, updateLocalSymbol } from "@/lib/bot/local-bot-store.server";
 
 const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 30_000);
 
@@ -13,7 +13,7 @@ function registry(): RunnerRegistry {
 }
 
 export async function runLocalBotTick(userId: string) {
-  const state = getLocalBotState(userId);
+  let state = getLocalBotState(userId);
   if (!state.cfg.is_running) return { ok: true, skipped: "stopped" };
   if (state.cfg.testnet !== true) {
     updateLocalBotConfig(userId, { is_running: false });
@@ -22,16 +22,36 @@ export async function runLocalBotTick(userId: string) {
   }
 
   const enabled = state.symbols.filter((s) => s.enabled);
-  if (enabled.length === 0) {
-    addLocalLog(userId, "warn", "No enabled symbols. Enable at least one symbol in the Symbols tab.");
+  const creds = await getCredsForUser(userId, true);
+  const openPositions = await binance.positionRisk(creds).catch(() => [] as any[]);
+  const openPositionSymbols = new Set(
+    openPositions
+      .filter((p: any) => Number(p.positionAmt) !== 0)
+      .map((p: any) => String(p.symbol)),
+  );
+  for (const symbol of openPositionSymbols) {
+    if (!state.symbols.some((s) => s.symbol === symbol)) {
+      updateLocalSymbol(userId, symbol, { enabled: false });
+      addLocalLog(
+        userId,
+        "info",
+        "Discovered an existing open position on Binance and added it to local management so the bot can attach exits.",
+        symbol,
+      );
+    }
+  }
+  state = getLocalBotState(userId);
+  const managed = state.symbols.filter((s) => s.enabled || openPositionSymbols.has(s.symbol));
+
+  if (managed.length === 0) {
+    addLocalLog(userId, "warn", "No enabled symbols or open positions to manage.");
     return { ok: true, processed: 0 };
   }
 
-  const creds = await getCredsForUser(userId, true);
   let processed = 0;
   let errors = 0;
 
-  for (const symbolCfg of state.symbols.filter((s) => !enabled.some((e) => e.symbol === s.symbol))) {
+  for (const symbolCfg of state.symbols.filter((s) => !managed.some((m) => m.symbol === s.symbol))) {
     try {
       const open = await binance.openOrders(creds, symbolCfg.symbol).catch(() => [] as any[]);
       const gridOrders = open.filter((o: any) => String(o.clientOrderId ?? "").startsWith(`grid_${symbolCfg.symbol}_`));
@@ -44,8 +64,16 @@ export async function runLocalBotTick(userId: string) {
     }
   }
 
-  for (const symbolCfg of enabled) {
+  for (const symbolCfg of managed) {
     try {
+      if (!symbolCfg.enabled && openPositionSymbols.has(symbolCfg.symbol)) {
+        addLocalLog(
+          userId,
+          "info",
+          "Managing close strategy for an open position on a symbol that is not currently enabled.",
+          symbolCfg.symbol,
+        );
+      }
       const open = await binance.openOrders(creds, symbolCfg.symbol).catch(() => [] as any[]);
       const gridOrders = open.filter((o: any) => String(o.clientOrderId ?? "").startsWith(`grid_${symbolCfg.symbol}_`));
       if (gridOrders.length > 1) {

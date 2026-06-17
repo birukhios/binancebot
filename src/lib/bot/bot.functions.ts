@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requireAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import {
   binance,
@@ -267,7 +267,7 @@ async function pauseBotForCredentialError(userId: string, message: string) {
 }
 
 export const getDashboard = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     const userId = context.userId;
     if (!hasSupabaseAdminEnv()) return await localDashboardFallback(userId);
@@ -487,7 +487,7 @@ export const getDashboard = createServerFn({ method: "GET" })
   });
 
 export const getTrades = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     if (!hasSupabaseAdminEnv()) {
       const local = getLocalBotState(context.userId);
@@ -533,7 +533,7 @@ export const getTrades = createServerFn({ method: "GET" })
   });
 
 export const getLogs = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     if (!hasSupabaseAdminEnv()) return getLocalBotState(context.userId).logs;
 
@@ -547,7 +547,7 @@ export const getLogs = createServerFn({ method: "GET" })
   });
 
 export const setBotRunning = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { running: boolean }) => z.object({ running: z.boolean() }).parse(d))
   .handler(async ({ data, context }) => {
     if (!hasSupabaseAdminEnv()) {
@@ -638,7 +638,7 @@ export const setBotRunning = createServerFn({ method: "POST" })
   });
 
 export const setTestnet = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { testnet: boolean }) => z.object({ testnet: z.boolean() }).parse(d))
   .handler(async ({ data, context }) => {
     if (!hasSupabaseAdminEnv()) {
@@ -664,7 +664,7 @@ export const setTestnet = createServerFn({ method: "POST" })
   });
 
 export const setMaxExposure = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { max: number }) => z.object({ max: z.number().positive() }).parse(d))
   .handler(async ({ data, context }) => {
     if (!hasSupabaseAdminEnv()) {
@@ -690,7 +690,7 @@ const intelligenceSchema = z.object({
 });
 
 export const setIntelligence = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: z.infer<typeof intelligenceSchema>) => intelligenceSchema.parse(d))
   .handler(async ({ data, context }) => {
     const patch: Record<string, any> = { updated_at: new Date().toISOString() };
@@ -712,7 +712,7 @@ export const setIntelligence = createServerFn({ method: "POST" })
   });
 
 export const runAutoSelect = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     if (!hasSupabaseAdminEnv()) {
       const local = getLocalBotState(context.userId);
@@ -739,7 +739,7 @@ export const runAutoSelect = createServerFn({ method: "POST" })
   });
 
 export const getNewsStatus = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     if (!hasSupabaseAdminEnv()) {
       return { enabled: false, active: false } as const;
@@ -795,7 +795,7 @@ const symbolSchema = z.object({
 });
 
 export const updateSymbol = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: z.infer<typeof symbolSchema>) => symbolSchema.parse(d))
   .handler(async ({ data, context }) => {
     if (!hasSupabaseAdminEnv()) {
@@ -824,7 +824,7 @@ export const updateSymbol = createServerFn({ method: "POST" })
   });
 
 export const learnSymbol = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { symbol: string }) => z.object({ symbol: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     const { learnFromTrades } = await import("@/lib/bot/learn.server");
@@ -839,7 +839,7 @@ export const learnSymbol = createServerFn({ method: "POST" })
   });
 
 export const killSwitch = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     const userId = context.userId;
     if (!hasSupabaseAdminEnv()) {
@@ -891,7 +891,7 @@ export const killSwitch = createServerFn({ method: "POST" })
   });
 
 export const closePosition = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { symbol: string }) => z.object({ symbol: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     const userId = context.userId;
@@ -915,7 +915,7 @@ export const closePosition = createServerFn({ method: "POST" })
   });
 
 export const cancelSymbolOrders = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { symbol: string }) => z.object({ symbol: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     const userId = context.userId;
@@ -937,7 +937,7 @@ export const cancelSymbolOrders = createServerFn({ method: "POST" })
   });
 
 export const testConnection = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .handler(async ({ context }) => {
     let activeTestnet = true;
     try {
@@ -979,7 +979,7 @@ function cleanOptionalSecret(value: string | null | undefined) {
 }
 
 export const saveBinanceCreds = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: z.infer<typeof credsSchema>) => credsSchema.parse(d))
   .handler(async ({ data, context }) => {
     const userId = context.userId;
@@ -1035,7 +1035,7 @@ export const saveBinanceCreds = createServerFn({ method: "POST" })
   });
 
 export const autoConfigureSymbol = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { symbol: string }) => z.object({ symbol: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     const userId = context.userId;
@@ -1200,7 +1200,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
   });
 
 export const optimizeSymbol = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireAuth])
   .inputValidator((d: { symbol: string; days?: number }) =>
     z.object({ symbol: z.string(), days: z.number().int().min(7).max(90).optional() }).parse(d),
   )

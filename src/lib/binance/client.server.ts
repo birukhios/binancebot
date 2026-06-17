@@ -563,6 +563,8 @@ export const binance = {
   },
   openOrders: (c: BinanceCreds, symbol?: string) =>
     signedReq<any[]>(c, "GET", "/fapi/v1/openOrders", symbol ? { symbol } : {}),
+  openAlgoOrders: (c: BinanceCreds, symbol?: string) =>
+    signedReq<any[]>(c, "GET", "/fapi/v1/openAlgoOrders", symbol ? { symbol } : {}),
   userTrades: (c: BinanceCreds, symbol: string, fromId?: number, limit = 100) =>
     signedReq<any[]>(c, "GET", "/fapi/v1/userTrades", { symbol, fromId, limit }),
   income: (
@@ -592,11 +594,14 @@ export const binance = {
     p: {
       symbol: string;
       side: "BUY" | "SELL";
-      type: "LIMIT" | "MARKET";
-      quantity: number;
+      type: "LIMIT" | "MARKET" | "STOP" | "STOP_MARKET" | "TAKE_PROFIT" | "TAKE_PROFIT_MARKET";
+      quantity?: number;
       price?: number;
+      stopPrice?: number;
       timeInForce?: "GTC" | "IOC" | "FOK" | "GTX";
       reduceOnly?: boolean;
+      closePosition?: boolean;
+      workingType?: "MARK_PRICE" | "CONTRACT_PRICE";
       newClientOrderId?: string;
     },
   ) =>
@@ -609,9 +614,36 @@ export const binance = {
         timeInForce: p.type === "LIMIT" ? (p.timeInForce ?? "GTC") : undefined,
       },
     ),
+  placeAlgoOrder: (
+    c: BinanceCreds,
+    p: {
+      symbol: string;
+      side: "BUY" | "SELL";
+      type: "STOP" | "STOP_MARKET" | "TAKE_PROFIT" | "TAKE_PROFIT_MARKET" | "TRAILING_STOP_MARKET";
+      quantity?: number;
+      price?: number;
+      triggerPrice?: number;
+      timeInForce?: "GTC" | "IOC" | "FOK" | "GTX";
+      closePosition?: boolean;
+      reduceOnly?: boolean;
+      workingType?: "MARK_PRICE" | "CONTRACT_PRICE";
+      clientAlgoId?: string;
+    },
+  ) =>
+    signedReq<{ algoId: number; clientAlgoId: string; algoStatus: string }>(
+      c,
+      "POST",
+      "/fapi/v1/algoOrder",
+      {
+        algoType: "CONDITIONAL",
+        ...p,
+      },
+    ),
 
   cancelOrder: (c: BinanceCreds, symbol: string, orderId: number) =>
     signedReq<any>(c, "DELETE", "/fapi/v1/order", { symbol, orderId }),
+  cancelAlgoOrder: (c: BinanceCreds, clientAlgoId: string) =>
+    signedReq<any>(c, "DELETE", "/fapi/v1/algoOrder", { clientAlgoId }),
   cancelAllOrders: (c: BinanceCreds, symbol: string) =>
     signedReq<any>(c, "DELETE", "/fapi/v1/allOpenOrders", { symbol }),
 };
