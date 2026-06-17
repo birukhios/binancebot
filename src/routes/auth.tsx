@@ -40,7 +40,26 @@ export function AuthPage() {
         navigate({ to: "/" });
       } else {
         const { error } = await authClient.signIn.email({ email, password });
-        if (error) throw error;
+        if (error) {
+          // Vercel currently runs Better Auth on ephemeral SQLite storage.
+          // If the serverless instance lost the user row, recover by recreating
+          // the same email/password pair through the already-enabled sign-up flow.
+          if (error.code === "INVALID_EMAIL_OR_PASSWORD") {
+            const recovered = await authClient.signUp.email({
+              email,
+              password,
+              name: name.trim() || email.split("@")[0] || email,
+            });
+
+            if (!recovered.error) {
+              toast.success("Account recovered. Signed in.");
+              navigate({ to: "/" });
+              return;
+            }
+          }
+
+          throw error;
+        }
         navigate({ to: "/" });
       }
     } catch (err) {
