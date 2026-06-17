@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const configPath = resolve(".vercel/output/config.json");
@@ -15,26 +15,27 @@ if (!Array.isArray(config.routes)) {
 
 const routes = config.routes;
 
-// Nitro's Vercel preset emits two identical functions: a catch-all named [...]
-// and an SSR function named __server. Vercel can get confused by the [...]
-// function name and route requests to the wrong target, so consolidate to a
-// single __server function and route every request there.
 const catchAllIndex = routes.findIndex((route) => route.src === "/(?:.*)" && route.dest === "/[...]");
-const serverIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
+const shellIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
 
-if (catchAllIndex !== -1) {
-  routes[catchAllIndex].dest = "/__server";
+// Keep the shell route for browser pages, but make sure API and TanStack
+// server-function requests hit the actual app handler ([...]).
+if (!routes.some((route) => route.src === "/api/(.*)" && route.dest === "/[...]")) {
+  routes.splice(2, 0, { src: "/api/(.*)", dest: "/[...]" });
+}
+if (!routes.some((route) => route.src === "/_serverFn/(.*)" && route.dest === "/[...]")) {
+  routes.splice(3, 0, { src: "/_serverFn/(.*)", dest: "/[...]" });
 }
 
-// Remove the now-unused [...] function directory so Vercel only deploys one
-// serverless function.
-const catchAllFuncDir = resolve(outputRoot, "functions/[...].func");
-if (existsSync(catchAllFuncDir)) {
-  rmSync(catchAllFuncDir, { recursive: true, force: true });
+// Preserve the original catch-all app function if Nitro generated it.
+if (catchAllIndex !== -1 && shellIndex !== -1 && catchAllIndex > shellIndex) {
+  const [catchAll] = routes.splice(catchAllIndex, 1);
+  const nextShellIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
+  routes.splice(nextShellIndex, 0, catchAll);
 }
 
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-console.log("Consolidated Vercel output to a single __server function.");
+console.log("Routed Vercel API and server functions to the app handler.");
 
 // Inject the hashed client JS/CSS into the SSR renderer template so that
 // browsers load the production bundles instead of the dev entry.
@@ -56,22 +57,20 @@ const escapedInjection =
   `\\n    <link rel="stylesheet" href="${cssHref}" />` +
   `\\n    <script type="module" src="${scriptSrc}"></script>`;
 
-const templatePath = resolve(outputRoot, "functions/__server.func/_chunks/renderer-template.mjs");
-if (!existsSync(templatePath)) {
-  process.exit(0);
+for (const templatePath of [
+  resolve(outputRoot, "functions/__server.func/_chunks/renderer-template.mjs"),
+  resolve(outputRoot, "functions/[...].func/_chunks/renderer-template.mjs"),
+]) {
+  if (!existsSync(templatePath)) continue;
+  const source = readFileSync(templatePath, "utf8");
+  if (source.includes(scriptSrc)) continue;
+  const patched = source
+    .replace(
+      "</head>\\n  <body>",
+      `${escapedInjection}\\n  </head>\\n  <body>`,
+    )
+    .replace('\\n    <script type="module" src="/src/client.tsx"><\\/script>', "");
+
+  writeFileSync(templatePath, patched);
 }
-
-const source = readFileSync(templatePath, "utf8");
-if (source.includes(scriptSrc)) {
-  process.exit(0);
-}
-
-const patched = source
-  .replace(
-    "</head>\\n  <body>",
-    `${escapedInjection}\\n  </head>\\n  <body>`,
-  )
-  .replace('\\n    <script type="module" src="/src/client.tsx"><\\/script>', "");
-
-writeFileSync(templatePath, patched);
 console.log(`Injected Vercel client assets into renderer template: ${scriptSrc} and ${cssHref}.`);

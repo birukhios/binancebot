@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-import { memoryAdapter } from "@better-auth/memory-adapter";
 import { betterAuth } from "better-auth";
 import { dash } from "@better-auth/infra";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
@@ -58,14 +57,8 @@ const dbPath = resolve(
   process.env.BETTER_AUTH_DB_PATH ?? (process.env.VERCEL ? "/tmp/auth.sqlite" : "./data/auth.sqlite"),
 );
 mkdirSync(dirname(dbPath), { recursive: true });
-const memoryDb = (globalThis as typeof globalThis & { __authMemoryDb?: Record<string, any[]> }).__authMemoryDb ??= {};
-let database: ReturnType<typeof memoryAdapter> | any;
-if (process.env.VERCEL) {
-  database = memoryAdapter(memoryDb);
-} else {
-  const sqliteModule = await import("better-sqlite3");
-  database = new sqliteModule.default(dbPath);
-}
+const sqliteModule = await import("better-sqlite3");
+const database = new sqliteModule.default(dbPath);
 
 export const auth = betterAuth({
   baseURL: resolveAuthBaseURL(),
