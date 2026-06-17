@@ -58,13 +58,13 @@ function Dashboard() {
   useEffect(() => {
     if (session.isPending) return;
 
-    const nextUserId = session.data?.user.id ?? null;
+    const nextUserId = session.data?.user?.id ?? null;
     setSessionUserId((previousUserId) => {
       if (previousUserId !== nextUserId) qc.clear();
       return nextUserId;
     });
     setAuthChecked(!!nextUserId);
-  }, [qc, session.data?.user.id, session.isPending]);
+  }, [qc, session.data?.user?.id, session.isPending]);
 
   const dashFn = useServerFn(getDashboard);
   const tradesFn = useServerFn(getTrades);
