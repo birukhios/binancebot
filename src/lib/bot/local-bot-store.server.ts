@@ -1,7 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-const filePath = resolve(process.env.LOCAL_BOT_STORE_PATH ?? "./data/local-bot-store.json");
+function defaultBotStorePath() {
+  if (
+    process.env.VERCEL ||
+    process.env.VERCEL_URL ||
+    process.env.NOW_REGION ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT
+  ) {
+    return "/tmp/local-bot-store.json";
+  }
+
+  return "./data/local-bot-store.json";
+}
+
+const requestedPath = process.env.LOCAL_BOT_STORE_PATH ?? defaultBotStorePath();
+const filePath = requestedPath.startsWith("/") ? requestedPath : resolve(requestedPath);
 
 type LocalUserStore = {
   cfg: Record<string, any>;

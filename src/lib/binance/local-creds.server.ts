@@ -1,7 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-const filePath = resolve(process.env.LOCAL_BINANCE_CREDS_PATH ?? "./data/binance-creds.json");
+function defaultCredsPath() {
+  if (
+    process.env.VERCEL ||
+    process.env.VERCEL_URL ||
+    process.env.NOW_REGION ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT
+  ) {
+    return "/tmp/binance-creds.json";
+  }
+
+  return "./data/binance-creds.json";
+}
+
+const requestedPath = process.env.LOCAL_BINANCE_CREDS_PATH ?? defaultCredsPath();
+const filePath = requestedPath.startsWith("/") ? requestedPath : resolve(requestedPath);
 
 type LocalCredsFile = Record<
   string,
