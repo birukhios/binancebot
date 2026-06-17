@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const configPath = resolve(".vercel/output/config.json");
@@ -37,40 +37,24 @@ if (catchAllIndex !== -1 && shellIndex !== -1 && catchAllIndex > shellIndex) {
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 console.log("Routed Vercel API and server functions to the app handler.");
 
-// Inject the hashed client JS/CSS into the SSR renderer template so that
-// browsers load the production bundles instead of the dev entry.
-const assetsDir = resolve(outputRoot, "static/assets");
-if (!existsSync(assetsDir)) {
-  process.exit(0);
-}
+// Nitro's generated Vercel Node handlers can degrade into a static shell
+// responder. Replace those wrappers with a direct adapter to the real SSR
+// server so auth/API routes execute on Vercel instead of returning HTML.
+const nodeAdapter = [
+  'import { t as toNodeHandler } from "./_libs/srvx.mjs";',
+  'import server from "./_ssr/index.mjs";',
+  "",
+  "const handler = toNodeHandler(server.fetch.bind(server));",
+  "",
+  "export default handler;",
+  "",
+].join("\n");
 
-const cssAsset = readdirSync(assetsDir).find((file) => /^styles-.*\.css$/.test(file));
-const manifestFile = readdirSync(assetsDir).find((file) => /^index-.*\.js$/.test(file));
-
-if (!cssAsset || !manifestFile) {
-  process.exit(0);
-}
-
-const scriptSrc = `/assets/${manifestFile}`;
-const cssHref = `/assets/${cssAsset}`;
-const escapedInjection =
-  `\\n    <link rel="stylesheet" href="${cssHref}" />` +
-  `\\n    <script type="module" src="${scriptSrc}"></script>`;
-
-for (const templatePath of [
-  resolve(outputRoot, "functions/__server.func/_chunks/renderer-template.mjs"),
-  resolve(outputRoot, "functions/[...].func/_chunks/renderer-template.mjs"),
+for (const handlerPath of [
+  resolve(outputRoot, "functions/__server.func/index.mjs"),
+  resolve(outputRoot, "functions/[...].func/index.mjs"),
 ]) {
-  if (!existsSync(templatePath)) continue;
-  const source = readFileSync(templatePath, "utf8");
-  if (source.includes(scriptSrc)) continue;
-  const patched = source
-    .replace(
-      "</head>\\n  <body>",
-      `${escapedInjection}\\n  </head>\\n  <body>`,
-    )
-    .replace('\\n    <script type="module" src="/src/client.tsx"><\\/script>', "");
-
-  writeFileSync(templatePath, patched);
+  if (!existsSync(handlerPath)) continue;
+  writeFileSync(handlerPath, nodeAdapter);
 }
-console.log(`Injected Vercel client assets into renderer template: ${scriptSrc} and ${cssHref}.`);
+console.log("Rewired Vercel Node handlers to the real SSR server.");
