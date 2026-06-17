@@ -46,7 +46,9 @@ if (!scriptMatch) {
 
 const scriptSrc = scriptMatch[1];
 const cssHref = `/assets/${cssAsset}`;
-const injection = `\n    <link rel="stylesheet" href="${cssHref}" />\n    <script type="module" src="${scriptSrc}"></script>`;
+const escapedInjection =
+  `\\n    <link rel="stylesheet" href="${cssHref}" />` +
+  `\\n    <script type="module" src="${scriptSrc}"></script>`;
 
 for (const templatePath of [
   resolve(outputRoot, "functions/[...].func/_chunks/renderer-template.mjs"),
@@ -55,7 +57,12 @@ for (const templatePath of [
   if (!existsSync(templatePath)) continue;
   const source = readFileSync(templatePath, "utf8");
   if (source.includes(scriptSrc)) continue;
-  const patched = source.replace("</head>\\n  <body>", `${injection}\\n  </head>\\n  <body>`);
+  const patched = source
+    .replace(
+      "</head>\\n  <body>",
+      `${escapedInjection}\\n  </head>\\n  <body>`,
+    )
+    .replace('\\n    <script type="module" src="/src/client.tsx"><\\/script>', "");
   writeFileSync(templatePath, patched);
 }
 
