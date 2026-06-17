@@ -7,6 +7,11 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
+  tanstackStart: {
+    server: {
+      entry: "server",
+    },
+  },
   vite: {
     server: {
       allowedHosts: [".trycloudflare.com", ".loca.lt"],
@@ -14,6 +19,9 @@ export default defineConfig({
   },
   nitro: {
     preset: "vercel",
+    externals: {
+      external: ["better-sqlite3"],
+    },
     vercel: {
       entryFormat: "node",
       functions: {
@@ -21,6 +29,7 @@ export default defineConfig({
         maxDuration: 60,
         memory: 1024,
       },
+      regions: ["fra1"],
       functionRules: {
         "/**": {
           maxDuration: 60,

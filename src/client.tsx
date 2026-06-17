@@ -1,10 +1,15 @@
-import { StartClient } from "@tanstack/react-start/client";
-import { StrictMode } from "react";
-import { hydrateRoot } from "react-dom/client";
+import { RouterProvider } from "@tanstack/react-router";
+import { StrictMode, startTransition } from "react";
+import { createRoot } from "react-dom/client";
 
-hydrateRoot(
-  document,
-  <StrictMode>
-    <StartClient />
-  </StrictMode>,
-);
+import { getRouter } from "./router";
+
+const router = getRouter();
+
+startTransition(() => {
+  createRoot(document).render(
+    <StrictMode>
+      <RouterProvider router={router} />
+    </StrictMode>,
+  );
+});
