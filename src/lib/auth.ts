@@ -5,6 +5,16 @@ import { betterAuth } from "better-auth";
 import { dash } from "@better-auth/infra";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
+function isServerlessRuntime() {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.VERCEL_URL ||
+      process.env.NOW_REGION ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.LAMBDA_TASK_ROOT,
+  );
+}
+
 function resolveAuthBaseURL() {
   const fallback =
     process.env.BETTER_AUTH_URL ??
@@ -53,10 +63,12 @@ function resolveTrustedOrigins() {
   return Array.from(new Set(origins));
 }
 
-const dbPath = resolve(
-  process.env.BETTER_AUTH_DB_PATH ?? (process.env.VERCEL ? "/tmp/auth.sqlite" : "./data/auth.sqlite"),
-);
-mkdirSync(dirname(dbPath), { recursive: true });
+const requestedDbPath =
+  process.env.BETTER_AUTH_DB_PATH ?? (isServerlessRuntime() ? "/tmp/auth.sqlite" : "./data/auth.sqlite");
+const dbPath = requestedDbPath.startsWith("/") ? requestedDbPath : resolve(requestedDbPath);
+if (!dbPath.startsWith("/tmp/")) {
+  mkdirSync(dirname(dbPath), { recursive: true });
+}
 const sqliteModule = await import("better-sqlite3");
 const database = new sqliteModule.default(dbPath);
 
