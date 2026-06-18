@@ -1068,7 +1068,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
 
     const spacingPctRaw = Math.max(0.2, Math.min(2.0, avgRangePct * 1.2));
     const spacingPct = Math.round(spacingPctRaw * 100) / 100;
-    const gridLevels = !hasSupabaseAdminEnv() ? 1 : 5;
+    const gridLevels = 1;
     const leverage = Math.max(2, Math.min(5, Math.round(2 / spacingPct)));
 
     if (!hasSupabaseAdminEnv()) {
@@ -1228,7 +1228,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     const available = parseFloat(acct.availableBalance) || 0;
 
     const spacings = [0.3, 0.5, 0.8, 1.2, 1.8, 2.5];
-    const levelsArr = hasSupabaseAdminEnv() ? [3, 5, 8] : [1];
+    const levelsArr = [1];
     const leverages = [2, 3, 5];
 
     type Trial = {
@@ -1312,7 +1312,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     await supabaseAdmin
       .from("symbol_config")
       .update({
-        grid_levels: best.gridLevels,
+        grid_levels: 1,
         grid_spacing_pct: best.spacingPct,
         order_size_usdt: best.orderSizeUsdt,
         leverage: best.leverage,
@@ -1334,7 +1334,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
       .eq("user_id", userId)
       .single();
     const currentCap = Number(botCfg?.max_total_notional_usdt ?? 500);
-    const planned = best.orderSizeUsdt * best.gridLevels * 2;
+    const planned = best.orderSizeUsdt * 2;
     if (planned > currentCap) {
       await supabaseAdmin
         .from("bot_config")
@@ -1348,13 +1348,13 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     await botLog(
       userId,
       "info",
-      `Optimized over ${days}d: ${best.gridLevels} lev × ${best.spacingPct}% × ${best.leverage}x → backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
+      `Optimized over ${days}d: 1 level × ${best.spacingPct}% × ${best.leverage}x -> backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
       symbol,
     );
 
     return {
       ok: true,
-      best,
+      best: { ...best, gridLevels: 1 },
       topResults: ranked.slice(0, 5).map((t) => ({
         spacingPct: t.spacingPct,
         gridLevels: t.gridLevels,

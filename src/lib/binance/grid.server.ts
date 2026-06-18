@@ -573,7 +573,12 @@ export async function reconcileSymbol(cfg: SymbolCfg, opts: { newsBlackout?: boo
       .single();
     const creds = await getCredsForUser(userId, bot?.testnet ?? true);
     const maxNotional = Number(bot?.max_total_notional_usdt ?? 500);
-    await reconcileSymbolLocked(cfg, creds, maxNotional, opts.newsBlackout ?? false);
+    await reconcileSymbolLocked(
+      { ...cfg, grid_levels: 1, single_grid_order: true },
+      creds,
+      maxNotional,
+      opts.newsBlackout ?? false,
+    );
   } finally {
     await releaseSymbolLock(userId, cfg.symbol);
   }
@@ -1056,7 +1061,7 @@ async function reconcileSymbolLocked(
         type: "LIMIT",
         quantity: d.quantity,
         price: d.price,
-        timeInForce: "GTC",
+        timeInForce: "GTX",
         reduceOnly: d.reduceOnly,
         newClientOrderId: cid,
       });
