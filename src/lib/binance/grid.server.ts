@@ -44,6 +44,11 @@ const LIQUIDATION_HARD_PCT = 5;
 const LIQUIDATION_SOFT_PCT = 10;
 const DEFAULT_STOP_LOSS_ROI_PCT = -50;
 const DUST_POSITION_NOTIONAL_USDT = 25;
+const TAKE_PROFIT_SPACING_MULT = 0.35;
+const TAKE_PROFIT_FEE_BUFFER_PCT = 0.025;
+const GRID_ORDER_MIN_LIFETIME_MS = 90_000;
+const GRID_REPRICE_TOLERANCE_MULT = 0.35;
+const FRONT_LEVEL_SPACING_MULT = 0.25;
 
 interface SymbolCfg {
   user_id: string;
@@ -96,6 +101,18 @@ function stopLossTargetPrice(
 function effectiveStopLossRoi(stopLossRoiPct: number | null | undefined) {
   const value = Number(stopLossRoiPct ?? DEFAULT_STOP_LOSS_ROI_PCT);
   return value < 0 ? value : DEFAULT_STOP_LOSS_ROI_PCT;
+}
+
+function effectiveTakeProfitSpacingPct(gridSpacingPct: number) {
+  return Math.max(0.1, Number(gridSpacingPct || 0) * TAKE_PROFIT_SPACING_MULT);
+}
+
+function gridRepriceTolerancePct(gridSpacingPct: number) {
+  return Math.max(0.05, Number(gridSpacingPct || 0) * GRID_REPRICE_TOLERANCE_MULT);
+}
+
+function levelSpacingMultiplier(level: number) {
+  return level === 1 ? FRONT_LEVEL_SPACING_MULT : level;
 }
 
 function roundStepUp(value: number, step: number, precision: number): number {
@@ -336,9 +353,9 @@ export async function maybeTakeProfit(
 
   // Round-trip taker fee buffer (~0.08%). Don't close until profit exceeds
   // both grid spacing AND fees, otherwise the market close eats the gain.
-  const TAKER_FEE_PCT = 0.04;
-  const feeBufferUsdt = (notional * TAKER_FEE_PCT * 2) / 100;
-  const targetUsdt = notional * (cfg.grid_spacing_pct / 100) + feeBufferUsdt;
+  const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct);
+  const feeBufferUsdt = (notional * TAKE_PROFIT_FEE_BUFFER_PCT) / 100;
+  const targetUsdt = notional * (tpSpacingPct / 100) + feeBufferUsdt;
   if (unrealized < targetUsdt) return false;
 
   // If the grid already has an opposite-side LIMIT order near the TP price,
@@ -347,11 +364,11 @@ export async function maybeTakeProfit(
   try {
     const openOrders = await binance.openOrders(creds, cfg.symbol);
     const exitSide = positionAmt > 0 ? "SELL" : "BUY";
-    const tpPrice =
+      const tpPrice =
       positionAmt > 0
-        ? entryPrice * (1 + cfg.grid_spacing_pct / 100)
-        : entryPrice * (1 - cfg.grid_spacing_pct / 100);
-    const tolerancePct = cfg.grid_spacing_pct * 1.5;
+        ? entryPrice * (1 + tpSpacingPct / 100)
+        : entryPrice * (1 - tpSpacingPct / 100);
+    const tolerancePct = tpSpacingPct * 1.5;
     const makerExit = openOrders.find((o: any) => {
       if (o.side !== exitSide) return false;
       const px = Number(o.price);
@@ -641,16 +658,7 @@ export async function reconcileSymbol(
     if (true) {
       const local = getLocalBotState(userId);
       const testnet = Boolean(local.cfg.testnet ?? true);
-      if (!testnet) {
-        await botLog(
-          userId,
-          "error",
-          "Local shared runner only supports Binance Futures TESTNET. Skipping tick.",
-          cfg.symbol,
-        );
-        return;
-      }
-      const creds = await getCredsForUser(userId, true);
+      const creds = await getCredsForUser(userId, testnet);
       const maxNotional = Number(local.cfg.max_total_notional_usdt ?? 1500);
       await reconcileSymbolLocked(
         cfg,
@@ -1005,36 +1013,11 @@ async function reconcileSymbolLocked(
   }
   const rawOrderSize = cfg.order_size_usdt * sizeMult;
   const configuredMinOrder = Math.max(0, Number(cfg.min_order_size_usdt ?? 0));
+  const configuredMaxOrder = Math.max(
+    configuredMinOrder,
+    Number(cfg.max_order_size_usdt ?? rawOrderSize),
+  );
   const minEntryNotional = Math.max(configuredMinOrder, f.minNotional * 1.1);
-  const effectiveOrderSize = Math.max(rawOrderSize, minEntryNotional);
-  const qty = roundStepUp(effectiveOrderSize / mark, f.stepSize, f.quantityPrecision);
-  if (qty < f.minQty) {
-    await botLog(
-      userId,
-      "warn",
-      `Computed qty ${qty} < minQty ${f.minQty} (after size×${sizeMult.toFixed(2)})`,
-      cfg.symbol,
-    );
-    return;
-  }
-  if (qty * mark < minEntryNotional) {
-    await botLog(
-      userId,
-      "warn",
-      `Computed notional ${(qty * mark).toFixed(2)} < min entry ${minEntryNotional.toFixed(2)}`,
-      cfg.symbol,
-    );
-    return;
-  }
-  if (qty * mark < f.minNotional) {
-    await botLog(
-      userId,
-      "warn",
-      `Computed notional ${(qty * mark).toFixed(2)} < minNotional ${f.minNotional}`,
-      cfg.symbol,
-    );
-    return;
-  }
 
   const volMult = atrPct ? Math.max(0.6, Math.min(2.0, atrPct / baseSpacing)) : 1.0;
   const sessMult = sessionSpacingMult(session.name);
@@ -1085,14 +1068,19 @@ async function reconcileSymbolLocked(
   // That gives the bot a deterministic closing plan even if mark/center shifts
   // around after entry.
   if (positionAmt !== 0 && positionEntryPrice > 0) {
-    const feePctBuffer = 0.1; // cover round-trip fees/slippage before net profit target
-    const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
-    if (closeQty >= f.minQty) {
-      const tpPx = roundStep(
-        closeTargetPrice(positionEntryPrice, positionAmt, cfg.grid_spacing_pct, feePctBuffer),
-        f.tickSize,
-        f.pricePrecision,
-      );
+      const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct);
+      const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
+      if (closeQty >= f.minQty) {
+        const tpPx = roundStep(
+          closeTargetPrice(
+            positionEntryPrice,
+            positionAmt,
+            tpSpacingPct,
+            TAKE_PROFIT_FEE_BUFFER_PCT,
+          ),
+          f.tickSize,
+          f.pricePrecision,
+        );
       if (positionAmt > 0) {
         desired.push({ side: "SELL", price: tpPx, level: 1, quantity: closeQty, reduceOnly: true });
       } else {
@@ -1118,8 +1106,9 @@ async function reconcileSymbolLocked(
   }
 
   for (let i = 1; i <= levels; i++) {
-    const buySpacing = ((baseSpacing * volMult * sessMult * buySkew) / 100) * i;
-    const sellSpacing = ((baseSpacing * volMult * sessMult * sellSkew) / 100) * i;
+    const levelMult = levelSpacingMultiplier(i);
+    const buySpacing = ((baseSpacing * volMult * sessMult * buySkew) / 100) * levelMult;
+    const sellSpacing = ((baseSpacing * volMult * sessMult * sellSkew) / 100) * levelMult;
     const buyPx = roundStep(center * (1 - buySpacing), f.tickSize, f.pricePrecision);
     const sellPx = roundStep(center * (1 + sellSpacing), f.tickSize, f.pricePrecision);
     if (cfg.single_grid_order) {
@@ -1131,7 +1120,7 @@ async function reconcileSymbolLocked(
         const plannedStop = roundStep(
           stopLossTargetPrice(
             buyPx,
-            qty,
+            1,
             effectiveStopLossRoi(cfg.stop_loss_roi_pct),
             Math.max(1, Number(cfg.leverage ?? 1)),
           ),
@@ -1139,7 +1128,7 @@ async function reconcileSymbolLocked(
           f.pricePrecision,
         );
         const plannedTp = roundStep(
-          closeTargetPrice(buyPx, qty, cfg.grid_spacing_pct, 0.1),
+          closeTargetPrice(buyPx, 1, cfg.grid_spacing_pct, 0.1),
           f.tickSize,
           f.pricePrecision,
         );
@@ -1151,13 +1140,13 @@ async function reconcileSymbolLocked(
             cfg.symbol,
           );
         } else {
-          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: 0 });
         }
       } else if (!blockSellAdds) {
         const plannedStop = roundStep(
           stopLossTargetPrice(
             sellPx,
-            -qty,
+            -1,
             effectiveStopLossRoi(cfg.stop_loss_roi_pct),
             Math.max(1, Number(cfg.leverage ?? 1)),
           ),
@@ -1165,7 +1154,7 @@ async function reconcileSymbolLocked(
           f.pricePrecision,
         );
         const plannedTp = roundStep(
-          closeTargetPrice(sellPx, -qty, cfg.grid_spacing_pct, 0.1),
+          closeTargetPrice(sellPx, -1, cfg.grid_spacing_pct, 0.1),
           f.tickSize,
           f.pricePrecision,
         );
@@ -1177,7 +1166,7 @@ async function reconcileSymbolLocked(
             cfg.symbol,
           );
         } else {
-          desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+          desired.push({ side: "SELL", price: sellPx, level: i, quantity: 0 });
         }
       }
     } else {
@@ -1187,7 +1176,7 @@ async function reconcileSymbolLocked(
         const plannedStop = roundStep(
           stopLossTargetPrice(
             buyPx,
-            qty,
+            1,
             effectiveStopLossRoi(cfg.stop_loss_roi_pct),
             Math.max(1, Number(cfg.leverage ?? 1)),
           ),
@@ -1195,7 +1184,7 @@ async function reconcileSymbolLocked(
           f.pricePrecision,
         );
         const plannedTp = roundStep(
-          closeTargetPrice(buyPx, qty, cfg.grid_spacing_pct, 0.1),
+          closeTargetPrice(buyPx, 1, cfg.grid_spacing_pct, 0.1),
           f.tickSize,
           f.pricePrecision,
         );
@@ -1207,14 +1196,14 @@ async function reconcileSymbolLocked(
             cfg.symbol,
           );
         } else {
-          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: 0 });
         }
       }
       if (allowSellEntry) {
         const plannedStop = roundStep(
           stopLossTargetPrice(
             sellPx,
-            -qty,
+            -1,
             effectiveStopLossRoi(cfg.stop_loss_roi_pct),
             Math.max(1, Number(cfg.leverage ?? 1)),
           ),
@@ -1222,7 +1211,7 @@ async function reconcileSymbolLocked(
           f.pricePrecision,
         );
         const plannedTp = roundStep(
-          closeTargetPrice(sellPx, -qty, cfg.grid_spacing_pct, 0.1),
+          closeTargetPrice(sellPx, -1, cfg.grid_spacing_pct, 0.1),
           f.tickSize,
           f.pricePrecision,
         );
@@ -1234,7 +1223,7 @@ async function reconcileSymbolLocked(
             cfg.symbol,
           );
         } else {
-          desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+          desired.push({ side: "SELL", price: sellPx, level: i, quantity: 0 });
         }
       }
     }
@@ -1251,26 +1240,54 @@ async function reconcileSymbolLocked(
       cfg.symbol,
     );
   }
-  const perOrderNotional = qty * mark;
   const remainingBudget = Math.max(0, maxNotional - globalExposure);
-  const maxFit = perOrderNotional > 0 ? Math.floor(remainingBudget / perOrderNotional) : 0;
   const reduceOnlyDesired = desired.filter((d) => d.reduceOnly);
   let entryDesired = desired.filter((d) => !d.reduceOnly);
+  const totalEntryCandidates = entryDesired.length;
   if (cfg.single_grid_order && entryDesired.length > 1) {
     entryDesired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
     entryDesired = entryDesired.slice(0, 1);
   }
-  if (maxFit < entryDesired.length) {
-    // Keep closest-to-mark levels first (smallest |level|), alternating sides.
-    entryDesired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
-    const trimmed = entryDesired.slice(0, maxFit);
-    await botLog(
-      userId,
-      maxFit === 0 ? "warn" : "info",
-      `Exposure ${globalExposure.toFixed(2)}/${maxNotional}: fitting ${maxFit}/${entryDesired.length} entry levels (~${perOrderNotional.toFixed(2)} each, budget ${remainingBudget.toFixed(2)}).`,
-      cfg.symbol,
+  entryDesired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
+  const maxEntryCountByMin =
+    minEntryNotional > 0 ? Math.floor(remainingBudget / minEntryNotional) : entryDesired.length;
+  if (maxEntryCountByMin <= 0) {
+      await botLog(
+        userId,
+        "warn",
+        `Exposure ${globalExposure.toFixed(2)}/${maxNotional}: fitting 0/${totalEntryCandidates} entry levels (~${minEntryNotional.toFixed(2)} min each, budget ${remainingBudget.toFixed(2)}).`,
+        cfg.symbol,
+      );
+    entryDesired = [];
+  } else if (entryDesired.length > 0) {
+    if (maxEntryCountByMin < entryDesired.length) {
+      entryDesired = entryDesired.slice(0, maxEntryCountByMin);
+    }
+
+    const perEntryBudget = Math.min(
+      configuredMaxOrder,
+      Math.max(minEntryNotional, remainingBudget / entryDesired.length),
     );
-    entryDesired = trimmed;
+    const sizedQty = roundStepUp(perEntryBudget / mark, f.stepSize, f.quantityPrecision);
+    const sizedNotional = sizedQty * mark;
+
+    if (sizedQty < f.minQty || sizedNotional < minEntryNotional || sizedNotional < f.minNotional) {
+      await botLog(
+        userId,
+        "warn",
+        `Exposure sizing produced qty ${sizedQty} (~${sizedNotional.toFixed(2)} USDT), below exchange minimums or configured entry floor.`,
+        cfg.symbol,
+      );
+      entryDesired = [];
+    } else {
+      entryDesired = entryDesired.map((d) => ({ ...d, quantity: sizedQty }));
+      await botLog(
+        userId,
+        entryDesired.length === totalEntryCandidates ? "info" : "warn",
+        `Exposure ${globalExposure.toFixed(2)}/${maxNotional}: fitting ${entryDesired.length}/${totalEntryCandidates} entry levels (~${sizedNotional.toFixed(2)} each, budget ${remainingBudget.toFixed(2)}).`,
+        cfg.symbol,
+      );
+    }
   }
   desired.length = 0;
   desired.push(...reduceOnlyDesired, ...entryDesired);
@@ -1306,6 +1323,9 @@ async function reconcileSymbolLocked(
   const desiredCids = new Set(desired.map((d) => `grid_${cfg.symbol}_${d.level}`));
   for (const [cid, o] of liveByLevel.entries()) {
     if (!desiredCids.has(cid)) {
+      const liveCreatedAt = Number(o.time ?? o.updateTime ?? 0);
+      const liveAgeMs = liveCreatedAt > 0 ? Date.now() - liveCreatedAt : Number.POSITIVE_INFINITY;
+      if (liveAgeMs < GRID_ORDER_MIN_LIFETIME_MS) continue;
       try {
         await binance.cancelOrder(creds, cfg.symbol, o.orderId);
         await remoteDb
@@ -1341,9 +1361,14 @@ async function reconcileSymbolLocked(
     if (live) {
       const livePx = Number(live.price ?? 0);
       const liveQty = Number(live.origQty ?? 0);
-      const samePrice = Math.abs(livePx - d.price) < Math.max(f.tickSize / 2, 1e-9);
+      const liveCreatedAt = Number(live.time ?? live.updateTime ?? 0);
+      const liveAgeMs = liveCreatedAt > 0 ? Date.now() - liveCreatedAt : Number.POSITIVE_INFINITY;
+      const repriceTolerancePct = gridRepriceTolerancePct(cfg.grid_spacing_pct);
+      const samePrice =
+        Math.abs(livePx - d.price) < Math.max(f.tickSize / 2, 1e-9) ||
+        (livePx > 0 && (Math.abs(livePx - d.price) / livePx) * 100 <= repriceTolerancePct);
       const sameQty = Math.abs(liveQty - d.quantity) < Math.max(f.stepSize / 2, 1e-9);
-      if (samePrice && sameQty) continue;
+      if ((samePrice && sameQty) || liveAgeMs < GRID_ORDER_MIN_LIFETIME_MS) continue;
       try {
         await binance.cancelOrder(creds, cfg.symbol, live.orderId);
       } catch (e) {
@@ -1383,6 +1408,13 @@ async function reconcileSymbolLocked(
           userId,
           "info",
           `Attached take-profit ${d.side} ${d.quantity} @ ${d.price}.`,
+          cfg.symbol,
+        );
+      } else {
+        await botLog(
+          userId,
+          "info",
+          `Placed grid entry ${d.side} ${d.quantity} @ ${d.price} (level ${d.level}).`,
           cfg.symbol,
         );
       }
