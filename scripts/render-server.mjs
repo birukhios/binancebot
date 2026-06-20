@@ -5,21 +5,38 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const clientDir = join(rootDir, "dist", "client");
+const distClientDir = join(rootDir, "dist", "client");
 const serverBundle = join(rootDir, "dist", "server", "server.js");
+const vercelClientDir = join(rootDir, ".vercel", "output", "static");
+const vercelServerBundle = join(
+  rootDir,
+  ".vercel",
+  "output",
+  "functions",
+  "__server.func",
+  "_ssr",
+  "index.mjs",
+);
 
-if (!existsSync(serverBundle)) {
+let clientDir = distClientDir;
+let handler;
+
+if (existsSync(serverBundle)) {
+  const serverEntry = await import("../dist/server/server.js");
+  handler = serverEntry.default?.fetch ?? serverEntry.fetch;
+} else if (existsSync(vercelServerBundle)) {
+  clientDir = vercelClientDir;
+  const serverEntry = await import("../.vercel/output/functions/__server.func/_ssr/index.mjs");
+  handler = serverEntry.default?.fetch?.bind(serverEntry.default) ?? serverEntry.fetch;
+} else {
   throw new Error(
     [
-      "Missing dist/server/server.js.",
-      "Render must run the build command before start: `npm ci && npm run render:build`.",
+      "Missing build output.",
+      "Run the build command before start: `npm ci && npm run render:build`.",
       "Then start the service with: `npm run start`.",
     ].join(" "),
   );
 }
-
-const serverEntry = await import("../dist/server/server.js");
-const handler = serverEntry.default?.fetch ?? serverEntry.fetch;
 
 if (typeof handler !== "function") {
   throw new Error("Render server could not find the built TanStack Start fetch handler.");

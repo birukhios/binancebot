@@ -17,15 +17,9 @@ services:
         generateValue: true
       - key: BETTER_AUTH_DB_PATH
         value: /tmp/auth.sqlite
+      - key: LOCAL_BOT_STORE_PATH
+        value: /tmp/local-bot-store.json
+      - key: LOCAL_BINANCE_CREDS_PATH
+        value: /tmp/binance-creds.json
       - key: BINANCE_TESTNET
         value: "true"
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: SUPABASE_PUBLISHABLE_KEY
-        sync: false
-      - key: VITE_SUPABASE_URL
-        sync: false
-      - key: VITE_SUPABASE_PUBLISHABLE_KEY
-        sync: false

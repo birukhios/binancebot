@@ -21,18 +21,25 @@ function resolveAuthBaseURL() {
     (process.env.VERCEL_URL
       ? `https://${process.env.VERCEL_URL}`
       : `http://127.0.0.1:${process.env.PORT ?? "8080"}`);
+  const allowedHosts = [
+    "localhost",
+    "localhost:*",
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "binancebot-github-io.vercel.app",
+    "*.vercel.app",
+    "*.trycloudflare.com",
+    "*.loca.lt",
+  ];
+
+  try {
+    const host = new URL(fallback).host;
+    const hostname = new URL(fallback).hostname;
+    allowedHosts.push(host, hostname);
+  } catch {}
 
   return {
-    allowedHosts: [
-      "localhost",
-      "localhost:*",
-      "127.0.0.1",
-      "127.0.0.1:*",
-      "binancebot-github-io.vercel.app",
-      "*.vercel.app",
-      "*.trycloudflare.com",
-      "*.loca.lt",
-    ],
+    allowedHosts: Array.from(new Set(allowedHosts)),
     fallback,
     protocol: "auto" as const,
   };
@@ -61,6 +68,15 @@ function resolveTrustedOrigins() {
   }
 
   return Array.from(new Set(origins));
+}
+
+function shouldUseSecureCookies() {
+  if (!process.env.BETTER_AUTH_URL) return undefined;
+  try {
+    return new URL(process.env.BETTER_AUTH_URL).protocol === "https:";
+  } catch {
+    return undefined;
+  }
 }
 
 const requestedDbPath =
@@ -127,16 +143,11 @@ export const auth = betterAuth({
     process.env.BETTER_AUTH_SECRET ??
     "local-development-better-auth-secret-change-before-production",
   database,
-  session: {
-    storeSessionInDatabase: false,
-    cookieCache: {
-      enabled: true,
-      maxAge: 60 * 60 * 24 * 7,
-      strategy: "jwe",
-    },
-  },
   emailAndPassword: {
     enabled: true,
+  },
+  advanced: {
+    useSecureCookies: shouldUseSecureCookies(),
   },
   plugins: [
     dash({

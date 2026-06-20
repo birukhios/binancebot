@@ -1,7 +1,6 @@
 // Binance USDⓈ-M Futures REST client. Server-only.
 import { createHmac } from "node:crypto";
 import { ProxyAgent } from "undici";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { localBinanceCredsForUser } from "@/lib/binance/local-creds.server";
 
 const MAINNET = "https://fapi.binance.com";
@@ -120,22 +119,13 @@ export function getCreds(testnet: boolean): BinanceCreds {
   return c;
 }
 
-/** Load Binance creds for a specific user. Falls back to env for the original owner. */
+/** Load Binance creds for a specific Better Auth user. Falls back to env for the original owner. */
 export async function getCredsForUser(userId: string, testnet: boolean): Promise<BinanceCreds> {
   const localCreds = localBinanceCredsForUser(userId);
   const localApiKey = testnet ? localCreds?.testnet_api_key : localCreds?.api_key;
   const localApiSecret = testnet ? localCreds?.testnet_api_secret : localCreds?.api_secret;
   if (localApiKey && localApiSecret)
     return { apiKey: localApiKey, apiSecret: localApiSecret, testnet };
-
-  const { data } = await supabaseAdmin
-    .from("user_binance_creds")
-    .select("api_key,api_secret,testnet_api_key,testnet_api_secret")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const apiKey = testnet ? data?.testnet_api_key : data?.api_key;
-  const apiSecret = testnet ? data?.testnet_api_secret : data?.api_secret;
-  if (apiKey && apiSecret) return { apiKey, apiSecret, testnet };
 
   if (userId === OWNER_USER_ID) {
     const env = envCreds(testnet);
@@ -253,6 +243,7 @@ async function bybitJson<T>(
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Bybit ${path} ${res.status}: ${text.slice(0, 160)}`);
+  if (!text.trim()) throw new Error(`Bybit ${path}: empty response`);
   const json = JSON.parse(text) as any;
   if (json.retCode !== 0) throw new Error(`Bybit ${path}: ${json.retMsg ?? "request failed"}`);
   return json as T;
@@ -272,7 +263,10 @@ async function demoMarketFallback<T>(
       signal: AbortSignal.timeout(BINANCE_READ_TIMEOUT_MS),
     });
     const text = await res.text();
-    if (res.ok) return JSON.parse(text) as T;
+    if (res.ok) {
+      if (!text.trim()) throw new Error(`Binance ${path}: empty demo fallback response`);
+      return JSON.parse(text) as T;
+    }
     if (!networkBlocked(res.status, text))
       throw new Error(`Binance ${path} ${res.status}: ${text.slice(0, 160)}`);
   } catch {
@@ -402,7 +396,13 @@ async function publicReq<T>(
       return demoMarketFallback<T>(path, params, error);
     throw error;
   }
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!text.trim()) {
+    const error = new Error(`Binance ${path}: empty public response`);
+    if (creds.testnet) return demoMarketFallback<T>(path, params, error);
+    throw error;
+  }
+  return JSON.parse(text) as T;
 }
 
 async function signedReq<T>(
@@ -451,6 +451,7 @@ async function signedReq<T>(
     }
   }
   if (!res.ok) throw new Error(cleanBinanceError(creds, method, path, res.status, text));
+  if (!text.trim()) return {} as T;
   return JSON.parse(text) as T;
 }
 

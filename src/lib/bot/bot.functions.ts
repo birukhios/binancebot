@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireAuth } from "@/integrations/supabase/auth-middleware";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { requireAuth } from "@/lib/auth-middleware";
 import {
   binance,
   binanceProxySource,
@@ -12,10 +11,17 @@ import {
   verifyFuturesCreds,
   type BinanceCreds,
 } from "@/lib/binance/client.server";
-import { syncFillsForSymbol, getTrendBias, getMarketSession } from "@/lib/binance/grid.server";
+import {
+  closePositionAndCancel,
+  syncFillsForSymbol,
+  getTrendBias,
+  getMarketSession,
+} from "@/lib/binance/grid.server";
 import { localBinanceCredsForUser, saveLocalBinanceCreds } from "@/lib/binance/local-creds.server";
 import {
   addLocalLog,
+  applyPaperHighRiskProfile as applyLocalPaperHighRiskProfile,
+  PAPER_HIGH_RISK_PROFILE,
   getLocalBotState,
   updateLocalBotConfig,
   updateLocalSymbol,
@@ -29,11 +35,40 @@ import { botLog } from "@/lib/bot/log.server";
 
 const FUTURES_TAKER_FEE_RATE = 0.0004;
 const FUTURES_MAKER_FEE_RATE = 0.0002;
+const LOSS_STREAK_MIN_LOSS_USDT = 1;
 const VPNHOOD_REPO_URL = "https://github.com/vpnhood/vpnhood";
 let publicIpCache: { ip: string | null; expiresAt: number } | null = null;
+const remoteDb: any = null;
+type LocalDashboardSnapshot = {
+  account: any;
+  positions: any[];
+  openOrders: any[];
+  realizedToday: number;
+  trendBias: Record<string, "up" | "down" | "flat" | null>;
+  updatedAt: number;
+};
 
-function hasSupabaseAdminEnv() {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+function localDashboardSnapshots() {
+  const g = globalThis as typeof globalThis & {
+    __localDashboardSnapshots?: Map<string, LocalDashboardSnapshot>;
+  };
+  g.__localDashboardSnapshots ??= new Map();
+  return g.__localDashboardSnapshots;
+}
+
+function getLocalDashboardSnapshot(userId: string) {
+  return localDashboardSnapshots().get(userId) ?? null;
+}
+
+function setLocalDashboardSnapshot(
+  userId: string,
+  snapshot: Omit<LocalDashboardSnapshot, "updatedAt">,
+) {
+  localDashboardSnapshots().set(userId, { ...snapshot, updatedAt: Date.now() });
+}
+
+function hasRemoteDb() {
+  return false;
 }
 
 async function serverPublicIp() {
@@ -63,20 +98,86 @@ async function binanceNetworkRouteStatus() {
   };
 }
 
+function botDayStartMs(now = new Date()) {
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 0, 0, 0);
+  return now.getTime() >= start ? start : start - 24 * 60 * 60 * 1000;
+}
+
+function nextBotDayStartIso(now = new Date()) {
+  return new Date(botDayStartMs(now) + 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function localStartRiskBlock(userId: string, creds: BinanceCreds) {
+  const state = getLocalBotState(userId);
+  if (
+    state.cfg.risk_profile === PAPER_HIGH_RISK_PROFILE &&
+    state.cfg.paper_kill_switch_triggered_at &&
+    state.cfg.paper_kill_switch_reason
+  ) {
+    return `Paper high-risk profile is locked by a kill switch: ${state.cfg.paper_kill_switch_reason}. Re-apply the profile to reset it.`;
+  }
+  const [account, positions, income] = await Promise.all([
+    binance.account(creds),
+    binance.positionRisk(creds).catch(() => [] as any[]),
+    binance.income(creds, { startTime: botDayStartMs(), limit: 1000 }).catch(() => [] as any[]),
+  ]);
+
+  const walletBalance = Math.max(0, Number(account.totalWalletBalance ?? 0));
+  const botCapitalPct = Math.max(20, Math.min(40, Number(state.cfg.bot_capital_pct ?? 30)));
+  const configuredCap = Number(state.cfg.max_total_notional_usdt ?? 0);
+  const botCapital = walletBalance * (botCapitalPct / 100);
+  const effectiveCapital = configuredCap > 0 ? Math.min(configuredCap, botCapital) : botCapital;
+  const realized = income.reduce((sum: number, row: any) => {
+    const type = String(row.incomeType ?? "");
+    if (!["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(type)) return sum;
+    return sum + Number(row.income ?? 0);
+  }, 0);
+  const unrealized = positions.reduce((sum: number, p: any) => {
+    if (Number(p.positionAmt) === 0) return sum;
+    return sum + Number(p.unRealizedProfit ?? p.unrealizedProfit ?? 0);
+  }, 0);
+  const pnl = realized + unrealized;
+  const dailyLossLimit =
+    effectiveCapital * (Math.max(0.1, Number(state.cfg.daily_loss_limit_pct ?? 1)) / 100);
+  if (dailyLossLimit > 0 && pnl <= -dailyLossLimit) {
+    return `Daily loss rule is active: today's PnL is ${pnl.toFixed(2)} USDT, below the -${dailyLossLimit.toFixed(2)} USDT limit. The bot can start again after ${nextBotDayStartIso()} UTC, or after you deliberately change the daily loss rule.`;
+  }
+
+  const realizedLosses = income
+    .filter((row: any) => String(row.incomeType ?? "") === "REALIZED_PNL")
+    .sort((a: any, b: any) => Number(b.time ?? 0) - Number(a.time ?? 0));
+  let consecutiveLosses = 0;
+  for (const row of realizedLosses) {
+    const value = Number(row.income ?? 0);
+    if (value <= -LOSS_STREAK_MIN_LOSS_USDT) consecutiveLosses++;
+    else if (value > 0) break;
+  }
+  const pauseCount = Math.max(1, Math.floor(Number(state.cfg.consecutive_loss_pause_count ?? 3)));
+  if (pnl < 0 && consecutiveLosses >= pauseCount) {
+    return `Loss-streak rule is active: ${consecutiveLosses} realized losses of at least ${LOSS_STREAK_MIN_LOSS_USDT.toFixed(2)} USDT in a row today while daily PnL is ${pnl.toFixed(2)} USDT. The bot is paused until the next bot day (${nextBotDayStartIso()} UTC).`;
+  }
+
+  return null;
+}
+
 async function localDashboardFallback(userId: string) {
   const local = getLocalBotState(userId);
   if (local.cfg.is_running) ensureLocalBotRunner(userId);
+  const snapshot = getLocalDashboardSnapshot(userId);
+  const snapshotFresh = snapshot ? Date.now() - snapshot.updatedAt < 60_000 : false;
   const mainnetCreds = localBinanceCredsForUser(userId);
   const credsStatus = {
     mainnet: Boolean(mainnetCreds?.api_key && mainnetCreds?.api_secret),
     testnet: Boolean(mainnetCreds?.testnet_api_key && mainnetCreds?.testnet_api_secret),
   };
-  let account: any = null;
-  let positions: any[] = [];
-  let openOrders: any[] = [];
+  let account: any = snapshotFresh ? (snapshot?.account ?? null) : null;
+  let positions: any[] = snapshotFresh ? [...(snapshot?.positions ?? [])] : [];
+  let openOrders: any[] = snapshotFresh ? [...(snapshot?.openOrders ?? [])] : [];
   let error: string | null = null;
-  let realizedToday = 0;
-  const trendBias: Record<string, "up" | "down" | "flat" | null> = {};
+  let realizedToday = snapshotFresh ? (snapshot?.realizedToday ?? 0) : 0;
+  const trendBias: Record<string, "up" | "down" | "flat" | null> = snapshotFresh
+    ? { ...(snapshot?.trendBias ?? {}) }
+    : {};
   const marketSession = getMarketSession();
 
   if (credsStatus.testnet) {
@@ -216,9 +317,36 @@ async function localDashboardFallback(userId: string) {
           notional: Number(o.origQty ?? 0) * Number(o.price ?? 0),
           estMakerFeeUsdt: Number(o.origQty ?? 0) * Number(o.price ?? 0) * FUTURES_MAKER_FEE_RATE,
         }));
+
+      setLocalDashboardSnapshot(userId, {
+        account,
+        positions,
+        openOrders,
+        realizedToday,
+        trendBias,
+      });
     } catch (e) {
       error = formatBinanceError(e, true);
+      if (snapshotFresh) {
+        account = account ?? snapshot?.account ?? null;
+        positions = positions.length > 0 ? positions : [...(snapshot?.positions ?? [])];
+        openOrders = openOrders.length > 0 ? openOrders : [...(snapshot?.openOrders ?? [])];
+        realizedToday = realizedToday || snapshot?.realizedToday || 0;
+        for (const [symbol, bias] of Object.entries(snapshot?.trendBias ?? {})) {
+          if (!(symbol in trendBias)) trendBias[symbol] = bias;
+        }
+      }
     }
+  }
+
+  if (!snapshotFresh && (positions.length > 0 || openOrders.length > 0 || account)) {
+    setLocalDashboardSnapshot(userId, {
+      account,
+      positions,
+      openOrders,
+      realizedToday,
+      trendBias,
+    });
   }
 
   return {
@@ -237,32 +365,13 @@ async function localDashboardFallback(userId: string) {
 }
 
 async function loadCreds(userId: string): Promise<{ creds: BinanceCreds; testnet: boolean }> {
-  if (!hasSupabaseAdminEnv()) {
-    const testnet = Boolean(getLocalBotState(userId).cfg.testnet ?? true);
-    if (!testnet) {
-      throw new Error(
-        "Local shared mode only supports Binance Futures TESTNET. Switch Testnet mode back on to trade from this link.",
-      );
-    }
-    const creds = await getCredsForUser(userId, testnet);
-    return { creds, testnet };
-  }
-
-  const { data } = await supabaseAdmin
-    .from("bot_config")
-    .select("testnet")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const testnet = data?.testnet ?? true;
+  const testnet = Boolean(getLocalBotState(userId).cfg.testnet ?? true);
   const creds = await getCredsForUser(userId, testnet);
   return { creds, testnet };
 }
 
 async function pauseBotForCredentialError(userId: string, message: string) {
-  await supabaseAdmin
-    .from("bot_config")
-    .update({ is_running: false, updated_at: new Date().toISOString() })
-    .eq("user_id", userId);
+  updateLocalBotConfig(userId, { is_running: false });
   await botLog(userId, "error", `Bot paused: ${message}`);
 }
 
@@ -270,21 +379,21 @@ export const getDashboard = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
     const userId = context.userId;
-    if (!hasSupabaseAdminEnv()) return await localDashboardFallback(userId);
+    if (!hasRemoteDb()) return await localDashboardFallback(userId);
 
-    let { data: cfg } = await supabaseAdmin
+    let { data: cfg } = await remoteDb
       .from("bot_config")
       .select("*")
       .eq("user_id", userId)
       .maybeSingle();
-    const { data: symbols } = await supabaseAdmin
+    const { data: symbols } = await remoteDb
       .from("symbol_config")
       .select("*")
       .eq("user_id", userId)
       .order("symbol");
 
     // Indicate whether the user has saved Binance creds (without leaking them).
-    const { data: credsRow } = await supabaseAdmin
+    const { data: credsRow } = await remoteDb
       .from("user_binance_creds")
       .select("api_key,testnet_api_key")
       .eq("user_id", userId)
@@ -460,7 +569,7 @@ export const getDashboard = createServerFn({ method: "GET" })
 
     const since = new Date();
     since.setUTCHours(0, 0, 0, 0);
-    const { data: todayTrades } = await supabaseAdmin
+    const { data: todayTrades } = await remoteDb
       .from("trades")
       .select("realized_pnl,commission")
       .eq("user_id", userId)
@@ -489,7 +598,7 @@ export const getDashboard = createServerFn({ method: "GET" })
 export const getTrades = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       const local = getLocalBotState(context.userId);
       const creds = await getCredsForUser(context.userId, true);
       const enabledSymbols = local.symbols.filter((s) => s.enabled).map((s) => s.symbol);
@@ -523,7 +632,7 @@ export const getTrades = createServerFn({ method: "GET" })
         .slice(0, 200);
     }
 
-    const { data } = await supabaseAdmin
+    const { data } = await remoteDb
       .from("trades")
       .select("*")
       .eq("user_id", context.userId)
@@ -535,9 +644,9 @@ export const getTrades = createServerFn({ method: "GET" })
 export const getLogs = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    if (!hasSupabaseAdminEnv()) return getLocalBotState(context.userId).logs;
+    if (!hasRemoteDb()) return getLocalBotState(context.userId).logs;
 
-    const { data } = await supabaseAdmin
+    const { data } = await remoteDb
       .from("bot_logs")
       .select("*")
       .eq("user_id", context.userId)
@@ -550,7 +659,7 @@ export const setBotRunning = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: { running: boolean }) => z.object({ running: z.boolean() }).parse(d))
   .handler(async ({ data, context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       if (data.running) {
         const { creds, testnet } = await loadCreds(context.userId);
         const check = await verifyFuturesCreds(creds);
@@ -568,6 +677,11 @@ export const setBotRunning = createServerFn({ method: "POST" })
           );
         } else {
           addLocalLog(context.userId, "warn", `Pre-flight account check skipped — ${check.reason}`);
+        }
+        const riskBlock = await localStartRiskBlock(context.userId, creds);
+        if (riskBlock) {
+          addLocalLog(context.userId, "error", riskBlock);
+          throw new Error(`Can't start bot: ${riskBlock}`);
         }
       }
       updateLocalBotConfig(context.userId, { is_running: data.running });
@@ -588,7 +702,7 @@ export const setBotRunning = createServerFn({ method: "POST" })
     }
 
     if (data.running) {
-      const { data: cfg } = await supabaseAdmin
+      const { data: cfg } = await remoteDb
         .from("bot_config")
         .select("testnet")
         .eq("user_id", context.userId)
@@ -629,7 +743,7 @@ export const setBotRunning = createServerFn({ method: "POST" })
         );
       }
     }
-    await supabaseAdmin
+    await remoteDb
       .from("bot_config")
       .update({ is_running: data.running, updated_at: new Date().toISOString() })
       .eq("user_id", context.userId);
@@ -641,7 +755,7 @@ export const setTestnet = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: { testnet: boolean }) => z.object({ testnet: z.boolean() }).parse(d))
   .handler(async ({ data, context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       updateLocalBotConfig(context.userId, { testnet: data.testnet, is_running: false });
       addLocalLog(
         context.userId,
@@ -651,7 +765,7 @@ export const setTestnet = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("bot_config")
       .update({ testnet: data.testnet, is_running: false, updated_at: new Date().toISOString() })
       .eq("user_id", context.userId);
@@ -667,12 +781,12 @@ export const setMaxExposure = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: { max: number }) => z.object({ max: z.number().positive() }).parse(d))
   .handler(async ({ data, context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       updateLocalBotConfig(context.userId, { max_total_notional_usdt: data.max });
       return { ok: true };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("bot_config")
       .update({ max_total_notional_usdt: data.max })
       .eq("user_id", context.userId);
@@ -697,13 +811,13 @@ export const setIntelligence = createServerFn({ method: "POST" })
     for (const k of Object.keys(data) as Array<keyof typeof data>) {
       if (data[k] !== undefined) patch[k] = data[k];
     }
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       updateLocalBotConfig(context.userId, patch);
       addLocalLog(context.userId, "info", `Intelligence settings updated: ${JSON.stringify(data)}`);
       return { ok: true };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("bot_config")
       .update(patch as any)
       .eq("user_id", context.userId);
@@ -711,10 +825,44 @@ export const setIntelligence = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const applyPaperHighRiskProfile = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .handler(async ({ context }) => {
+    if (!hasRemoteDb()) {
+      stopLocalBotRunner(context.userId);
+      applyLocalPaperHighRiskProfile(context.userId);
+      addLocalLog(
+        context.userId,
+        "warn",
+        "Applied paper high-risk profile: TESTNET-only, 8x leverage, tighter grids, and hard kill switches.",
+      );
+      return { ok: true };
+    }
+
+    await remoteDb
+      .from("bot_config")
+      .update({
+        risk_profile: PAPER_HIGH_RISK_PROFILE,
+        testnet: true,
+        is_running: false,
+        bot_capital_pct: 40,
+        daily_profit_target_pct: 4,
+        daily_loss_limit_pct: 0.75,
+        max_open_trades: 2,
+        consecutive_loss_pause_count: 1,
+        drawdown_pause_pct: 2,
+        max_total_notional_usdt: 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", context.userId);
+    await botLog(context.userId, "warn", "Applied paper high-risk profile");
+    return { ok: true };
+  });
+
 export const runAutoSelect = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       const local = getLocalBotState(context.userId);
       const max = Number(local.cfg.auto_select_max_symbols ?? 4);
       const top = local.symbols.slice(0, max).map((s) => ({ symbol: s.symbol, score: 0 }));
@@ -728,7 +876,7 @@ export const runAutoSelect = createServerFn({ method: "POST" })
     }
 
     const { rankAndApplyAutoSelect } = await import("@/lib/bot/ranking.server");
-    const { data: cfg } = await supabaseAdmin
+    const { data: cfg } = await remoteDb
       .from("bot_config")
       .select("auto_select_max_symbols")
       .eq("user_id", context.userId)
@@ -741,11 +889,11 @@ export const runAutoSelect = createServerFn({ method: "POST" })
 export const getNewsStatus = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       return { enabled: false, active: false } as const;
     }
 
-    const { data: cfg } = await supabaseAdmin
+    const { data: cfg } = await remoteDb
       .from("bot_config")
       .select("news_pause_enabled,news_pause_window_min,news_currencies")
       .eq("user_id", context.userId)
@@ -798,7 +946,7 @@ export const updateSymbol = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: z.infer<typeof symbolSchema>) => symbolSchema.parse(d))
   .handler(async ({ data, context }) => {
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       updateLocalSymbol(context.userId, data.symbol, data);
       addLocalLog(context.userId, "info", `Updated ${data.symbol} symbol settings`, data.symbol);
       if (getLocalBotState(context.userId).cfg.is_running) {
@@ -815,7 +963,7 @@ export const updateSymbol = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("symbol_config")
       .update({ ...data, updated_at: new Date().toISOString() })
       .eq("user_id", context.userId)
@@ -827,8 +975,86 @@ export const learnSymbol = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: { symbol: string }) => z.object({ symbol: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
+    if (!hasRemoteDb()) {
+      const userId = context.userId;
+      const symbol = data.symbol;
+      const state = getLocalBotState(userId);
+      const cfg = state.symbols.find((s) => s.symbol === symbol);
+      if (!cfg) return { applied: false, note: "symbol not configured" };
+
+      const { creds } = await loadCreds(userId);
+      const { researchOpenSourceInspiredStrategies } =
+        await import("@/lib/bot/strategy-research.server");
+      const [fills, klines, account] = await Promise.all([
+        binance.userTrades(creds, symbol, undefined, 500).catch(() => [] as any[]),
+        binance.klines(creds, symbol, "1h", 1000),
+        binance.account(creds),
+      ]);
+      const closedFills = fills
+        .map((t: any) => ({
+          realizedPnl: Number(t.realizedPnl ?? 0),
+          commission: String(t.commissionAsset ?? "")
+            .toUpperCase()
+            .includes("USDT")
+            ? Number(t.commission ?? 0)
+            : 0,
+        }))
+        .filter((t) => t.realizedPnl !== 0 || t.commission !== 0);
+
+      const research = researchOpenSourceInspiredStrategies(klines, {
+        symbol,
+        availableBalance: Math.max(
+          0,
+          Number(account.availableBalance ?? account.totalWalletBalance ?? 0),
+        ),
+      });
+      const patch = { ...research.patch };
+
+      let fillNote = `own fills: ${closedFills.length}/12, not enough to override research`;
+      if (closedFills.length >= 12) {
+        const netPnl = closedFills.reduce((sum, t) => sum + t.realizedPnl - t.commission, 0);
+        const wins = closedFills.filter((t) => t.realizedPnl - t.commission > 0).length;
+        const losses = closedFills.filter((t) => t.realizedPnl - t.commission < 0).length;
+        const winRate = wins / closedFills.length;
+        const currentSpacing = Number(patch.grid_spacing_pct ?? cfg.grid_spacing_pct ?? 0.8);
+        const currentStop = Number(patch.stop_loss_roi_pct ?? cfg.stop_loss_roi_pct ?? -12);
+
+        if (netPnl > 0 && winRate >= 0.58) {
+          patch.grid_spacing_pct = Math.max(0.6, currentSpacing - 0.05);
+          patch.stop_loss_roi_pct = Math.max(-16, currentStop - 1);
+        } else if (netPnl < 0 || losses > wins) {
+          patch.grid_spacing_pct = Math.min(1.2, currentSpacing + 0.1);
+          patch.stop_loss_roi_pct = Math.min(-8, currentStop + 2);
+        }
+        patch.learning_net_pnl = Math.round(netPnl * 10000) / 10000;
+        patch.learning_win_rate = Math.round(winRate * 10000) / 10000;
+        patch.learning_fills = closedFills.length;
+        fillNote = `own fills: net ${netPnl.toFixed(4)} USDT, win rate ${(winRate * 100).toFixed(1)}%`;
+      }
+      patch.learning_notes = `${patch.learning_notes}. ${fillNote}.`;
+      patch.learning_fills = closedFills.length;
+      patch.learning_at = new Date().toISOString();
+
+      updateLocalSymbol(userId, symbol, {
+        ...patch,
+        grid_levels: 2,
+        learning_at: new Date().toISOString(),
+      });
+      updateLocalBotConfig(userId, { max_open_trades: 4 });
+      addLocalLog(
+        userId,
+        "info",
+        `Learned open-source-inspired strategy: ${research.best.source}/${research.best.name} over ${Math.round(klines.length / 24)}d. OOS PnL ${research.best.test.realizedPnl} USDT, fills ${research.best.test.fills}, DD ${research.best.test.maxDrawdown}. Applied spacing ${patch.grid_spacing_pct}%, stop ${patch.stop_loss_roi_pct}%, ${patch.leverage}x. ${fillNote}.`,
+        symbol,
+      );
+      return {
+        applied: true,
+        note: `applied ${research.best.source}/${research.best.name}: spacing ${patch.grid_spacing_pct}%, stop ${patch.stop_loss_roi_pct}%, ${patch.leverage}x`,
+      };
+    }
+
     const { learnFromTrades } = await import("@/lib/bot/learn.server");
-    const { data: cfg } = await supabaseAdmin
+    const { data: cfg } = await remoteDb
       .from("symbol_config")
       .select("*")
       .eq("user_id", context.userId)
@@ -842,7 +1068,7 @@ export const killSwitch = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
     const userId = context.userId;
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       stopLocalBotRunner(userId);
       updateLocalBotConfig(userId, { is_running: false });
       const { creds } = await loadCreds(userId);
@@ -863,10 +1089,10 @@ export const killSwitch = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
-    await supabaseAdmin.from("bot_config").update({ is_running: false }).eq("user_id", userId);
+    await remoteDb.from("bot_config").update({ is_running: false }).eq("user_id", userId);
     try {
       const { creds } = await loadCreds(userId);
-      const { data: symbols } = await supabaseAdmin
+      const { data: symbols } = await remoteDb
         .from("symbol_config")
         .select("symbol")
         .eq("user_id", userId);
@@ -877,7 +1103,7 @@ export const killSwitch = createServerFn({ method: "POST" })
           await botLog(userId, "warn", `cancelAll ${s.symbol}: ${(e as Error).message}`);
         }
       }
-      await supabaseAdmin
+      await remoteDb
         .from("grid_orders")
         .update({ status: "CANCELED" })
         .eq("user_id", userId)
@@ -896,22 +1122,19 @@ export const closePosition = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const userId = context.userId;
     const { creds } = await loadCreds(userId);
-    const positions = await binance.positionRisk(creds, data.symbol);
-    const pos = positions.find((p: any) => p.symbol === data.symbol);
-    const amt = parseFloat(pos?.positionAmt ?? "0");
-    if (amt === 0) return { ok: true, message: "no position" };
-    await binance.placeOrder(creds, {
-      symbol: data.symbol,
-      side: amt > 0 ? "SELL" : "BUY",
-      type: "MARKET",
-      quantity: Math.abs(amt),
-      reduceOnly: true,
-    });
-    await botLog(userId, "info", "Manually closed position", data.symbol);
-    if (hasSupabaseAdminEnv()) {
+    const closed = await closePositionAndCancel(userId, creds, data.symbol);
+    await botLog(
+      userId,
+      closed ? "info" : "warn",
+      closed
+        ? "Manually closed position and canceled symbol orders"
+        : "Manual close found no open position",
+      data.symbol,
+    );
+    if (hasRemoteDb()) {
       await syncFillsForSymbol(userId, creds, data.symbol);
     }
-    return { ok: true };
+    return { ok: true, message: closed ? "closed" : "no position" };
   });
 
 export const cancelSymbolOrders = createServerFn({ method: "POST" })
@@ -921,12 +1144,12 @@ export const cancelSymbolOrders = createServerFn({ method: "POST" })
     const userId = context.userId;
     const { creds } = await loadCreds(userId);
     await binance.cancelAllOrders(creds, data.symbol);
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       addLocalLog(userId, "info", "Canceled all open orders", data.symbol);
       return { ok: true };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("grid_orders")
       .update({ status: "CANCELED" })
       .eq("user_id", userId)
@@ -1010,25 +1233,25 @@ export const saveBinanceCreds = createServerFn({ method: "POST" })
       throw new Error("Enter a complete Binance API key and secret pair before saving.");
     }
 
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       saveLocalBinanceCreds(userId, patch);
       addLocalLog(userId, "info", "Updated Binance API credentials");
       return { ok: true };
     }
 
-    const { data: existing } = await supabaseAdmin
+    const { data: existing } = await remoteDb
       .from("user_binance_creds")
       .select("user_id")
       .eq("user_id", userId)
       .maybeSingle();
 
     if (existing) {
-      await supabaseAdmin
+      await remoteDb
         .from("user_binance_creds")
         .update({ ...patch, updated_at: new Date().toISOString() })
         .eq("user_id", userId);
     } else {
-      await supabaseAdmin.from("user_binance_creds").insert({ user_id: userId, ...patch });
+      await remoteDb.from("user_binance_creds").insert({ user_id: userId, ...patch });
     }
     await botLog(userId, "info", "Updated Binance API credentials");
     return { ok: true };
@@ -1071,7 +1294,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
     const gridLevels = 1;
     const leverage = Math.max(2, Math.min(5, Math.round(2 / spacingPct)));
 
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       const available = parseFloat(acct.availableBalance) || 0;
       const orderSize = Math.max(75, Math.min(150, Math.round(available * 0.02 * 100) / 100));
       const lowerBound = Math.round(low7d * 0.98 * 1e6) / 1e6;
@@ -1119,12 +1342,8 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
     }
 
     const [{ data: botCfg }, { data: otherSymbols }] = await Promise.all([
-      supabaseAdmin
-        .from("bot_config")
-        .select("max_total_notional_usdt")
-        .eq("user_id", userId)
-        .single(),
-      supabaseAdmin
+      remoteDb.from("bot_config").select("max_total_notional_usdt").eq("user_id", userId).single(),
+      remoteDb
         .from("symbol_config")
         .select("symbol,enabled,order_size_usdt,grid_levels")
         .eq("user_id", userId)
@@ -1149,7 +1368,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
     const lowerBound = Math.round(low7d * 0.98 * 1e6) / 1e6;
     const upperBound = Math.round(high7d * 1.02 * 1e6) / 1e6;
 
-    await supabaseAdmin
+    await remoteDb
       .from("symbol_config")
       .update({
         grid_levels: gridLevels,
@@ -1164,7 +1383,7 @@ export const autoConfigureSymbol = createServerFn({ method: "POST" })
       .eq("symbol", symbol);
 
     if (newCap !== currentCap) {
-      await supabaseAdmin
+      await remoteDb
         .from("bot_config")
         .update({ max_total_notional_usdt: newCap, updated_at: new Date().toISOString() })
         .eq("user_id", userId);
@@ -1228,7 +1447,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     const available = parseFloat(acct.availableBalance) || 0;
 
     const spacings = [0.3, 0.5, 0.8, 1.2, 1.8, 2.5];
-    const levelsArr = [1];
+    const levelsArr = symbol === "BTCUSDT" ? [1, 2] : [1];
     const leverages = [2, 3, 5];
 
     type Trial = {
@@ -1262,11 +1481,11 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     const ranked = (valid.length ? valid : trials).sort((a, b) => b.score - a.score);
     const best = ranked[0];
 
-    if (!hasSupabaseAdminEnv()) {
+    if (!hasRemoteDb()) {
       const orderSizeUsdt = Math.max(75, Math.min(150, best.orderSizeUsdt));
       updateLocalSymbol(userId, symbol, {
         enabled: true,
-        grid_levels: 1,
+        grid_levels: best.gridLevels,
         grid_spacing_pct: best.spacingPct,
         order_size_usdt: orderSizeUsdt,
         min_order_size_usdt: 50,
@@ -1284,16 +1503,16 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
       addLocalLog(
         userId,
         "info",
-        `Optimized one-grid ${symbol} over ${days}d: 1 level x ${best.spacingPct}% x ${best.leverage}x -> backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
+        `Optimized ${symbol} over ${days}d: ${best.gridLevels} level(s) x ${best.spacingPct}% x ${best.leverage}x -> backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
         symbol,
       );
 
       return {
         ok: true,
-        best: { ...best, gridLevels: 1, orderSizeUsdt },
+        best: { ...best, gridLevels: best.gridLevels, orderSizeUsdt },
         topResults: ranked.slice(0, 5).map((t) => ({
           spacingPct: t.spacingPct,
-          gridLevels: 1,
+          gridLevels: t.gridLevels,
           leverage: t.leverage,
           orderSizeUsdt: Math.max(75, Math.min(150, t.orderSizeUsdt)),
           realizedPnl: t.realizedPnl,
@@ -1309,10 +1528,10 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
       };
     }
 
-    await supabaseAdmin
+    await remoteDb
       .from("symbol_config")
       .update({
-        grid_levels: 1,
+        grid_levels: best.gridLevels,
         grid_spacing_pct: best.spacingPct,
         order_size_usdt: best.orderSizeUsdt,
         leverage: best.leverage,
@@ -1328,7 +1547,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
       .eq("user_id", userId)
       .eq("symbol", symbol);
 
-    const { data: botCfg } = await supabaseAdmin
+    const { data: botCfg } = await remoteDb
       .from("bot_config")
       .select("max_total_notional_usdt")
       .eq("user_id", userId)
@@ -1336,7 +1555,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     const currentCap = Number(botCfg?.max_total_notional_usdt ?? 500);
     const planned = best.orderSizeUsdt * 2;
     if (planned > currentCap) {
-      await supabaseAdmin
+      await remoteDb
         .from("bot_config")
         .update({
           max_total_notional_usdt: Math.ceil(planned),
@@ -1348,7 +1567,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     await botLog(
       userId,
       "info",
-      `Optimized over ${days}d: 1 level × ${best.spacingPct}% × ${best.leverage}x -> backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
+      `Optimized over ${days}d: ${best.gridLevels} level(s) x ${best.spacingPct}% x ${best.leverage}x -> backtest PnL ${best.realizedPnl} USDT, ${best.fills} fills, max DD ${best.maxDrawdown}, return ${best.netReturnPct}%`,
       symbol,
     );
 

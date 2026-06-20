@@ -14,16 +14,31 @@ export const Route = createFileRoute("/auth")({
 
 export function AuthPage() {
   const navigate = useNavigate();
-  const session = authClient.useSession();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
+  function finishAuth() {
+    navigate({ to: "/" });
+    window.location.assign("/");
+  }
+
   useEffect(() => {
-    if (session.data) navigate({ to: "/" });
-  }, [navigate, session.data]);
+    let cancelled = false;
+
+    fetch("/api/session", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.user?.id) navigate({ to: "/" });
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,7 +52,7 @@ export function AuthPage() {
         });
         if (error) throw error;
         toast.success("Account created.");
-        navigate({ to: "/" });
+        finishAuth();
       } else {
         const { error } = await authClient.signIn.email({ email, password });
         if (error) {
@@ -53,14 +68,14 @@ export function AuthPage() {
 
             if (!recovered.error) {
               toast.success("Account recovered. Signed in.");
-              navigate({ to: "/" });
+              finishAuth();
               return;
             }
           }
 
           throw error;
         }
-        navigate({ to: "/" });
+        finishAuth();
       }
     } catch (err) {
       toast.error((err as Error).message);

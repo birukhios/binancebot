@@ -21,6 +21,7 @@ import {
   saveBinanceCreds,
   learnSymbol,
   setIntelligence,
+  applyPaperHighRiskProfile,
   runAutoSelect,
   getNewsStatus,
 } from "@/lib/bot/bot.functions";
@@ -41,30 +42,54 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { AlertTriangle, LogOut, Power, RefreshCw } from "lucide-react";
+import { AlertTriangle, LogOut, Moon, Power, RefreshCw, SunMedium } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Grid Bot Dashboard" }] }),
   component: Dashboard,
 });
 
+type ClientSession = {
+  user?: {
+    id?: string;
+  };
+} | null;
+
+type ThemeMode = "light" | "dark";
+
+async function fetchClientSession(): Promise<ClientSession> {
+  const res = await fetch("/api/session", { credentials: "include" });
+  if (!res.ok) throw new Error("Could not check sign-in status.");
+  return res.json();
+}
+
 function Dashboard() {
   const router = useRouter();
   const qc = useQueryClient();
-  const session = authClient.useSession();
-  const [authChecked, setAuthChecked] = useState(false);
-  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === "undefined") return "light";
+    const stored = window.localStorage.getItem("kelay-theme");
+    if (stored === "light" || stored === "dark") return stored;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
 
   useEffect(() => {
-    if (session.isPending) return;
+    const root = document.documentElement;
+    root.classList.toggle("dark", theme === "dark");
+    root.style.colorScheme = theme;
+    window.localStorage.setItem("kelay-theme", theme);
+  }, [theme]);
 
-    const nextUserId = session.data?.user?.id ?? null;
-    setSessionUserId((previousUserId) => {
-      if (previousUserId !== nextUserId) qc.clear();
-      return nextUserId;
-    });
-    setAuthChecked(!!nextUserId);
-  }, [qc, session.data?.user?.id, session.isPending]);
+  const session = useQuery({
+    queryKey: ["auth-session"],
+    queryFn: fetchClientSession,
+    retry: false,
+  });
+  const sessionUserId = session.data?.user?.id ?? null;
+
+  useEffect(() => {
+    if (session.isSuccess && !sessionUserId) qc.clear();
+  }, [qc, session.isSuccess, sessionUserId]);
 
   const dashFn = useServerFn(getDashboard);
   const tradesFn = useServerFn(getTrades);
@@ -73,23 +98,24 @@ function Dashboard() {
   const dash = useQuery({
     queryKey: ["dashboard", sessionUserId],
     queryFn: () => dashFn(),
-    enabled: authChecked && !!sessionUserId,
+    enabled: !!sessionUserId,
     retry: false,
+    placeholderData: (previous) => previous,
+    staleTime: 10_000,
     refetchInterval: (query) => (query.state.error ? false : 3000),
     refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
-    staleTime: 0,
+    refetchOnWindowFocus: false,
   });
   const trades = useQuery({
     queryKey: ["trades", sessionUserId],
     queryFn: () => tradesFn(),
-    enabled: authChecked && !!sessionUserId,
+    enabled: !!sessionUserId,
     retry: false,
   });
   const logs = useQuery({
     queryKey: ["logs", sessionUserId],
     queryFn: () => logsFn(),
-    enabled: authChecked && !!sessionUserId,
+    enabled: !!sessionUserId,
     retry: false,
     refetchInterval: (query) => (query.state.error ? false : 10000),
   });
@@ -97,7 +123,7 @@ function Dashboard() {
   const news = useQuery({
     queryKey: ["news", sessionUserId],
     queryFn: () => newsFn(),
-    enabled: authChecked && !!sessionUserId,
+    enabled: !!sessionUserId,
     retry: false,
     refetchInterval: (query) => (query.state.error ? false : 60000),
   });
@@ -120,6 +146,7 @@ function Dashboard() {
   const optimizeFn = useServerFn(optimizeSymbol);
   const saveCredsFn = useServerFn(saveBinanceCreds);
   const learnFn = useServerFn(learnSymbol);
+  const applyHighRiskFn = useServerFn(applyPaperHighRiskProfile);
 
   const startStopMut = useMutation({
     mutationFn: (running: boolean) => startStop({ data: { running } }),
@@ -150,8 +177,8 @@ function Dashboard() {
     },
   });
 
-  if (session.isPending) return <AuthPage />;
-  if (!authChecked) return <AuthPage />;
+  if (session.isLoading) return <AuthPage />;
+  if (!sessionUserId) return <AuthPage />;
   if (dash.isError) {
     const message =
       dash.error instanceof Error ? dash.error.message : "The dashboard could not load.";
@@ -216,6 +243,7 @@ function Dashboard() {
   const symbols = dash.data?.symbols ?? [];
   const credsStatus = dash.data?.credsStatus;
   const credsReady = cfg?.testnet ? !!credsStatus?.testnet : !!credsStatus?.mainnet;
+  const isDashRefreshing = dash.isFetching && !!dash.data;
   const grossUnrealized = positions.reduce(
     (sum: number, p: any) => sum + Number(p.unrealizedProfit ?? 0),
     0,
@@ -263,6 +291,20 @@ function Dashboard() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? (
+                <SunMedium className="mr-2 h-4 w-4" />
+              ) : (
+                <Moon className="mr-2 h-4 w-4" />
+              )}
+              {theme === "dark" ? "Light" : "Dark"}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -370,7 +412,14 @@ function Dashboard() {
           <TabsContent value="overview" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Open positions</CardTitle>
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle>Open positions</CardTitle>
+                  {isDashRefreshing && (
+                    <Badge variant="outline" className="text-xs">
+                      Refreshing live state
+                    </Badge>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 {positions.length === 0 ? (
@@ -578,17 +627,19 @@ function Dashboard() {
                 credsReady={credsReady}
                 startPending={startStopMut.isPending}
                 onTrade={async (next) => {
-                  toast.info(`Studying ${s.symbol} and optimizing one-grid setup...`);
+                  toast.info(`Studying ${s.symbol} and optimizing the grid setup...`);
                   try {
                     await optimizeFn({ data: { symbol: s.symbol, days: 30 } });
                   } catch (e) {
                     toast.warning(`Optimizer skipped: ${(e as Error).message}`);
                   }
-                  await updSym({ data: { ...next, enabled: true, grid_levels: 1 } });
+                  await updSym({
+                    data: { ...next, enabled: true, grid_levels: s.symbol === "BTCUSDT" ? 2 : 1 },
+                  });
                   if (!cfg?.is_running) {
                     await startStop({ data: { running: true } });
                   }
-                  toast.success(`${s.symbol} one-order grid enabled`);
+                  toast.success(`${s.symbol} grid enabled`);
                   invalidate();
                 }}
                 onCancel={async () => {
@@ -746,6 +797,27 @@ function Dashboard() {
                       invalidate();
                     }}
                   />
+                </div>
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                  <div>
+                    <Label className="text-base">Paper high-risk profile</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Forces TESTNET, increases BTC leverage, widens order sizing, and arms hard
+                      kill switches for daily loss, drawdown, loss streaks, and repeated API
+                      failures.
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={async () => {
+                      await applyHighRiskFn();
+                      toast.success("Paper high-risk profile applied");
+                      invalidate();
+                    }}
+                  >
+                    Apply paper high-risk profile
+                  </Button>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="maxexp">Max total notional (USDT)</Label>

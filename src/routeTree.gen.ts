@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSessionRouteImport } from './routes/api/session'
 import { Route as ApiAuthRouteImport } from './routes/api/auth'
 import { Route as ApiPublicBotTickRouteImport } from './routes/api/public/bot-tick'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -23,6 +24,11 @@ const AuthRoute = AuthRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSessionRoute = ApiSessionRouteImport.update({
+  id: '/api/session',
+  path: '/api/session',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthRoute = ApiAuthRouteImport.update({
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/api/auth': typeof ApiAuthRouteWithChildren
+  '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/api/auth': typeof ApiAuthRouteWithChildren
+  '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
 }
@@ -60,6 +68,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/api/auth': typeof ApiAuthRouteWithChildren
+  '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
 }
@@ -69,15 +78,23 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/api/auth'
+    | '/api/session'
     | '/api/auth/$'
     | '/api/public/bot-tick'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/api/auth' | '/api/auth/$' | '/api/public/bot-tick'
+  to:
+    | '/'
+    | '/auth'
+    | '/api/auth'
+    | '/api/session'
+    | '/api/auth/$'
+    | '/api/public/bot-tick'
   id:
     | '__root__'
     | '/'
     | '/auth'
     | '/api/auth'
+    | '/api/session'
     | '/api/auth/$'
     | '/api/public/bot-tick'
   fileRoutesById: FileRoutesById
@@ -86,6 +103,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
   ApiAuthRoute: typeof ApiAuthRouteWithChildren
+  ApiSessionRoute: typeof ApiSessionRoute
   ApiPublicBotTickRoute: typeof ApiPublicBotTickRoute
 }
 
@@ -103,6 +121,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/session': {
+      id: '/api/session'
+      path: '/api/session'
+      fullPath: '/api/session'
+      preLoaderRoute: typeof ApiSessionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth': {
@@ -144,6 +169,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
   ApiAuthRoute: ApiAuthRouteWithChildren,
+  ApiSessionRoute: ApiSessionRoute,
   ApiPublicBotTickRoute: ApiPublicBotTickRoute,
 }
 export const routeTree = rootRouteImport

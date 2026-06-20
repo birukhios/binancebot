@@ -24,12 +24,10 @@ NODE_OPTIONS=--max-old-space-size=2048
 BETTER_AUTH_URL=https://YOUR-RENDER-SERVICE.onrender.com
 BETTER_AUTH_SECRET=<generate a long random secret>
 BETTER_AUTH_DB_PATH=/tmp/auth.sqlite
+LOCAL_BOT_STORE_PATH=/tmp/local-bot-store.json
+LOCAL_BINANCE_CREDS_PATH=/tmp/binance-creds.json
 BINANCE_TESTNET=true
-SUPABASE_URL=<your Supabase URL>
-SUPABASE_SERVICE_ROLE_KEY=<your Supabase service role key>
-SUPABASE_PUBLISHABLE_KEY=<your Supabase publishable key>
-VITE_SUPABASE_URL=<same Supabase URL>
-VITE_SUPABASE_PUBLISHABLE_KEY=<same Supabase publishable key>
+BOT_TICK_SECRET=<generate a long random secret>
 ```
 
 Optional Binance/proxy variables:
@@ -47,4 +45,4 @@ BINANCE_API_SECRET=
 - Keep live trading off until testnet works on Render.
 - If Binance rejects Render's IP, check the app Settings page for the server public IP and update the Binance API key allow-list.
 - Free Render services may sleep when idle.
-- Free Render services have an ephemeral filesystem, so the local Better Auth SQLite file can reset after redeploys/restarts. For durable production login state, use a paid persistent disk or move auth storage to a managed database.
+- Free Render services have an ephemeral filesystem, so Better Auth users, bot settings, and saved API keys can reset after redeploys/restarts. For production, use a persistent disk or a VPS with persistent storage.

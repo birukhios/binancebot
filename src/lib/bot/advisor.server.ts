@@ -3,7 +3,6 @@
 import { generateText, Output } from "ai";
 import { z } from "zod";
 import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { botLog } from "@/lib/bot/log.server";
 
 const DecisionSchema = z.object({
@@ -104,20 +103,6 @@ Be conservative in strong adverse trends and after losing streaks.`;
     const decision = experimental_output as AdvisorDecision;
     cache.set(cacheKey(userId, ctx.symbol), { at: Date.now(), decision });
 
-    // Persist (best-effort)
-    await supabaseAdmin.from("bot_advisor_calls").insert({
-      user_id: userId,
-      symbol: ctx.symbol,
-      decision: decision as any,
-    });
-    await supabaseAdmin
-      .from("symbol_config")
-      .update({
-        last_advisor_at: new Date().toISOString(),
-        last_advisor_note: `${decision.action}/${decision.bias} (conf ${decision.confidence.toFixed(2)}): ${decision.reason}`,
-      })
-      .eq("user_id", userId)
-      .eq("symbol", ctx.symbol);
     await botLog(
       userId,
       "info",

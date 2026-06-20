@@ -1,13 +1,49 @@
 // Per-symbol grid reconciliation: ensure N buy levels below mark and N sell levels above.
-import { binance, getCredsForUser, getSymbolFilters, isBinanceNetworkBlock, roundStep, type BinanceCreds } from "./client.server";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import {
+  binance,
+  getCredsForUser,
+  getSymbolFilters,
+  isBinanceNetworkBlock,
+  roundStep,
+  type BinanceCreds,
+} from "./client.server";
 import { botLog } from "@/lib/bot/log.server";
 import { getLocalBotState } from "@/lib/bot/local-bot-store.server";
 // (advisor removed — see commit notes)
 
+function localDbResult(data: unknown = null) {
+  return Promise.resolve({ data, error: null });
+}
+
+const remoteDb = {
+  from() {
+    const builder: any = {
+      select: () => builder,
+      update: () => builder,
+      delete: () => builder,
+      insert: () => localDbResult(),
+      upsert: () => localDbResult(),
+      eq: () => builder,
+      in: () => builder,
+      lt: () => builder,
+      gte: () => builder,
+      lte: () => builder,
+      order: () => builder,
+      limit: () => builder,
+      maybeSingle: () => localDbResult(null),
+      single: () => localDbResult(null),
+      then: (resolve: (value: { data: null; error: null }) => unknown) =>
+        localDbResult(null).then(resolve),
+    };
+    return builder;
+  },
+};
+
 // Liquidation guard thresholds (% distance from mark to liquidation price)
 const LIQUIDATION_HARD_PCT = 5;
 const LIQUIDATION_SOFT_PCT = 10;
+const DEFAULT_STOP_LOSS_ROI_PCT = -50;
+const DUST_POSITION_NOTIONAL_USDT = 25;
 
 interface SymbolCfg {
   user_id: string;
@@ -16,6 +52,8 @@ interface SymbolCfg {
   grid_levels: number;
   grid_spacing_pct: number;
   order_size_usdt: number;
+  min_order_size_usdt?: number | null;
+  max_order_size_usdt?: number | null;
   leverage: number;
   upper_bound: number | null;
   lower_bound: number | null;
@@ -42,9 +80,7 @@ function closeTargetPrice(
   feePctBuffer: number,
 ) {
   const netPct = Math.max(spacingPct + feePctBuffer, feePctBuffer);
-  return positionAmt > 0
-    ? entryPrice * (1 + netPct / 100)
-    : entryPrice * (1 - netPct / 100);
+  return positionAmt > 0 ? entryPrice * (1 + netPct / 100) : entryPrice * (1 - netPct / 100);
 }
 
 function stopLossTargetPrice(
@@ -54,9 +90,17 @@ function stopLossTargetPrice(
   leverage: number,
 ) {
   const lossPct = Math.max(0, Math.abs(stopLossRoiPct)) / Math.max(leverage, 1);
-  return positionAmt > 0
-    ? entryPrice * (1 - lossPct / 100)
-    : entryPrice * (1 + lossPct / 100);
+  return positionAmt > 0 ? entryPrice * (1 - lossPct / 100) : entryPrice * (1 + lossPct / 100);
+}
+
+function effectiveStopLossRoi(stopLossRoiPct: number | null | undefined) {
+  const value = Number(stopLossRoiPct ?? DEFAULT_STOP_LOSS_ROI_PCT);
+  return value < 0 ? value : DEFAULT_STOP_LOSS_ROI_PCT;
+}
+
+function roundStepUp(value: number, step: number, precision: number): number {
+  const rounded = Math.ceil(value / step) * step;
+  return parseFloat(rounded.toFixed(precision));
 }
 
 // EMA of the last N closes. Returns null if not enough data.
@@ -178,21 +222,21 @@ export async function getPriceZScore(
   }
 }
 
-
-
 /** Session-based spacing multiplier (tighter during high-vol overlaps). */
 function sessionSpacingMult(name: string): number {
   switch (name) {
-    case "ny_london_overlap": return 0.85;
-    case "us": return 0.95;
-    case "london": return 1.0;
-    case "asia": return 1.15;
-    default: return 1.3; // off-hours
+    case "ny_london_overlap":
+      return 0.85;
+    case "us":
+      return 0.95;
+    case "london":
+      return 1.0;
+    case "asia":
+      return 1.15;
+    default:
+      return 1.3; // off-hours
   }
 }
-
-
-
 
 export async function closePositionAndCancel(
   userId: string,
@@ -201,7 +245,7 @@ export async function closePositionAndCancel(
 ): Promise<boolean> {
   try {
     await binance.cancelAllOrders(creds, symbol);
-    await supabaseAdmin
+    await remoteDb
       .from("grid_orders")
       .update({ status: "CANCELED" })
       .eq("user_id", userId)
@@ -211,22 +255,67 @@ export async function closePositionAndCancel(
     await botLog(userId, "warn", `cancelAll: ${(e as Error).message}`, symbol);
   }
 
-  const positions = await binance.positionRisk(creds, symbol);
-  const pos = positions.find((p: any) => p.symbol === symbol && Number(p.positionAmt) !== 0);
-  if (!pos) return false;
-  const positionAmt = Number(pos.positionAmt);
+  try {
+    const openAlgo = await binance.openAlgoOrders(creds, symbol);
+    for (const order of openAlgo) {
+      const clientAlgoId = String(order.clientAlgoId ?? "");
+      if (!clientAlgoId) continue;
+      try {
+        await binance.cancelAlgoOrder(creds, clientAlgoId);
+      } catch (e) {
+        await botLog(
+          userId,
+          "warn",
+          `cancel protective ${clientAlgoId}: ${(e as Error).message}`,
+          symbol,
+        );
+      }
+    }
+  } catch (e) {
+    await botLog(userId, "warn", `cancelAlgo: ${(e as Error).message}`, symbol);
+  }
+
   const f = await getSymbolFilters(creds, symbol);
-  const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
-  if (closeQty < f.minQty) return false;
-  await binance.placeOrder(creds, {
-    symbol,
-    side: positionAmt > 0 ? "SELL" : "BUY",
-    type: "MARKET",
-    quantity: closeQty,
-    reduceOnly: true,
-    newClientOrderId: `oor_${symbol}_${Date.now()}`,
-  });
-  return true;
+  let submitted = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const positions = await binance.positionRisk(creds, symbol);
+    const pos = positions.find((p: any) => p.symbol === symbol && Number(p.positionAmt) !== 0);
+    if (!pos) return submitted;
+    const positionAmt = Number(pos.positionAmt);
+    const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
+    if (closeQty <= 0) return submitted;
+    if (closeQty < f.minQty) {
+      await botLog(
+        userId,
+        "warn",
+        `Close residual qty ${closeQty} < minQty ${f.minQty}; attempting reduce-only dust close.`,
+        symbol,
+      );
+    }
+    await binance.placeOrder(creds, {
+      symbol,
+      side: positionAmt > 0 ? "SELL" : "BUY",
+      type: "MARKET",
+      quantity: closeQty,
+      reduceOnly: true,
+      newClientOrderId: `cls${symbol.slice(0, 8)}${Date.now().toString().slice(-10)}${attempt}`,
+    });
+    submitted = true;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+
+  const remaining = await binance.positionRisk(creds, symbol);
+  const stillOpen = remaining.find((p: any) => p.symbol === symbol && Number(p.positionAmt) !== 0);
+  if (stillOpen) {
+    await botLog(
+      userId,
+      "error",
+      `Close residual remains after retries: ${stillOpen.positionAmt}.`,
+      symbol,
+    );
+    return false;
+  }
+  return submitted;
 }
 
 export async function maybeTakeProfit(
@@ -258,9 +347,10 @@ export async function maybeTakeProfit(
   try {
     const openOrders = await binance.openOrders(creds, cfg.symbol);
     const exitSide = positionAmt > 0 ? "SELL" : "BUY";
-    const tpPrice = positionAmt > 0
-      ? entryPrice * (1 + cfg.grid_spacing_pct / 100)
-      : entryPrice * (1 - cfg.grid_spacing_pct / 100);
+    const tpPrice =
+      positionAmt > 0
+        ? entryPrice * (1 + cfg.grid_spacing_pct / 100)
+        : entryPrice * (1 - cfg.grid_spacing_pct / 100);
     const tolerancePct = cfg.grid_spacing_pct * 1.5;
     const makerExit = openOrders.find((o: any) => {
       if (o.side !== exitSide) return false;
@@ -292,7 +382,7 @@ export async function maybeTakeProfit(
 
   try {
     await binance.cancelAllOrders(creds, cfg.symbol);
-    await supabaseAdmin
+    await remoteDb
       .from("grid_orders")
       .update({ status: "CANCELED" })
       .eq("user_id", userId)
@@ -324,9 +414,8 @@ export async function maybeStopLoss(
   creds: BinanceCreds,
   cfg: SymbolCfg,
 ): Promise<boolean> {
-  const stopRoi = Number(cfg.stop_loss_roi_pct ?? 0);
+  const stopRoi = effectiveStopLossRoi(cfg.stop_loss_roi_pct);
   const maxAgeMin = Number(cfg.max_position_age_minutes ?? 0);
-  if (!stopRoi && !maxAgeMin) return false;
 
   const positions = await binance.positionRisk(creds, cfg.symbol);
   const pos = positions.find((p: any) => p.symbol === cfg.symbol && Number(p.positionAmt) !== 0);
@@ -344,7 +433,7 @@ export async function maybeStopLoss(
   if (stopRoi < 0 && roiPct <= stopRoi) {
     reason = `Stop-loss: ROI ${roiPct.toFixed(2)}% <= ${stopRoi}% (uPnL ${upnl.toFixed(4)} USDT).`;
   } else if (maxAgeMin > 0) {
-    const { data: lastFill } = await supabaseAdmin
+    const { data: lastFill } = await remoteDb
       .from("trades")
       .select("filled_at")
       .eq("user_id", userId)
@@ -371,9 +460,8 @@ export async function maybeStopLoss(
   return true;
 }
 
-
 export async function syncFillsForSymbol(userId: string, creds: BinanceCreds, symbol: string) {
-  const { data: last } = await supabaseAdmin
+  const { data: last } = await remoteDb
     .from("trades")
     .select("binance_trade_id")
     .eq("user_id", userId)
@@ -384,23 +472,21 @@ export async function syncFillsForSymbol(userId: string, creds: BinanceCreds, sy
   const fromId = last?.binance_trade_id ? Number(last.binance_trade_id) + 1 : undefined;
   const fills = await binance.userTrades(creds, symbol, fromId, 100);
   for (const t of fills) {
-    await supabaseAdmin
-      .from("trades")
-      .upsert(
-        {
-          user_id: userId,
-          symbol,
-          side: t.side,
-          price: Number(t.price),
-          qty: Number(t.qty),
-          realized_pnl: Number(t.realizedPnl ?? 0),
-          commission: Number(t.commission ?? 0),
-          binance_order_id: t.orderId,
-          binance_trade_id: t.id,
-          filled_at: new Date(t.time).toISOString(),
-        },
-        { onConflict: "binance_trade_id" },
-      );
+    await remoteDb.from("trades").upsert(
+      {
+        user_id: userId,
+        symbol,
+        side: t.side,
+        price: Number(t.price),
+        qty: Number(t.qty),
+        realized_pnl: Number(t.realizedPnl ?? 0),
+        commission: Number(t.commission ?? 0),
+        binance_order_id: t.orderId,
+        binance_trade_id: t.id,
+        filled_at: new Date(t.time).toISOString(),
+      },
+      { onConflict: "binance_trade_id" },
+    );
   }
   return fills.length;
 }
@@ -429,7 +515,7 @@ async function getGlobalExposure(creds: BinanceCreds) {
 
 // Guardrails for auto-eviction.
 const EVICT_MIN_AGE_MIN = 10; // never close a position younger than this
-const EVICT_MAX_ROI_PCT = 0;  // never close a position with ROI above this
+const EVICT_MAX_ROI_PCT = 0; // never close a position with ROI above this
 
 /**
  * If global exposure exceeds the user's cap, close the single "worst" open
@@ -450,7 +536,7 @@ export async function evictWorstPositionIfOverCap(
   if (open.length === 0) return false;
 
   const symbols = open.map((p: any) => p.symbol);
-  const { data: lastFills } = await supabaseAdmin
+  const { data: lastFills } = await remoteDb
     .from("trades")
     .select("symbol,filled_at")
     .eq("user_id", userId)
@@ -513,13 +599,13 @@ const LOCK_TTL_MS = 90_000;
 
 async function acquireSymbolLock(userId: string, symbol: string): Promise<boolean> {
   // Reclaim stale lock first.
-  await supabaseAdmin
+  await remoteDb
     .from("symbol_locks")
     .delete()
     .eq("user_id", userId)
     .eq("symbol", symbol)
     .lt("locked_at", new Date(Date.now() - LOCK_TTL_MS).toISOString());
-  const { error } = await supabaseAdmin
+  const { error } = await remoteDb
     .from("symbol_locks")
     .insert({ user_id: userId, symbol, locked_at: new Date().toISOString() });
   if (error) {
@@ -531,14 +617,13 @@ async function acquireSymbolLock(userId: string, symbol: string): Promise<boolea
 }
 
 async function releaseSymbolLock(userId: string, symbol: string): Promise<void> {
-  await supabaseAdmin
-    .from("symbol_locks")
-    .delete()
-    .eq("user_id", userId)
-    .eq("symbol", symbol);
+  await remoteDb.from("symbol_locks").delete().eq("user_id", userId).eq("symbol", symbol);
 }
 
-export async function reconcileSymbol(cfg: SymbolCfg, opts: { newsBlackout?: boolean } = {}) {
+export async function reconcileSymbol(
+  cfg: SymbolCfg,
+  opts: { newsBlackout?: boolean; entriesBlocked?: boolean } = {},
+) {
   const userId = cfg.user_id;
 
   const gotLock = await acquireSymbolLock(userId, cfg.symbol);
@@ -553,20 +638,31 @@ export async function reconcileSymbol(cfg: SymbolCfg, opts: { newsBlackout?: boo
   }
 
   try {
-    if (!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    if (true) {
       const local = getLocalBotState(userId);
       const testnet = Boolean(local.cfg.testnet ?? true);
       if (!testnet) {
-        await botLog(userId, "error", "Local shared runner only supports Binance Futures TESTNET. Skipping tick.", cfg.symbol);
+        await botLog(
+          userId,
+          "error",
+          "Local shared runner only supports Binance Futures TESTNET. Skipping tick.",
+          cfg.symbol,
+        );
         return;
       }
       const creds = await getCredsForUser(userId, true);
       const maxNotional = Number(local.cfg.max_total_notional_usdt ?? 1500);
-      await reconcileSymbolLocked({ ...cfg, grid_levels: 1, single_grid_order: true }, creds, maxNotional, opts.newsBlackout ?? false);
+      await reconcileSymbolLocked(
+        cfg,
+        creds,
+        maxNotional,
+        opts.newsBlackout ?? false,
+        opts.entriesBlocked ?? false,
+      );
       return;
     }
 
-    const { data: bot } = await supabaseAdmin
+    const { data: bot } = await remoteDb
       .from("bot_config")
       .select("testnet,max_total_notional_usdt")
       .eq("user_id", userId)
@@ -574,10 +670,11 @@ export async function reconcileSymbol(cfg: SymbolCfg, opts: { newsBlackout?: boo
     const creds = await getCredsForUser(userId, bot?.testnet ?? true);
     const maxNotional = Number(bot?.max_total_notional_usdt ?? 500);
     await reconcileSymbolLocked(
-      { ...cfg, grid_levels: 1, single_grid_order: true },
+      cfg,
       creds,
       maxNotional,
       opts.newsBlackout ?? false,
+      opts.entriesBlocked ?? false,
     );
   } finally {
     await releaseSymbolLock(userId, cfg.symbol);
@@ -589,29 +686,44 @@ async function reconcileSymbolLocked(
   creds: BinanceCreds,
   maxNotional: number,
   newsBlackout: boolean = false,
+  entriesBlocked: boolean = false,
 ) {
   const userId = cfg.user_id;
 
   try {
     await syncFillsForSymbol(userId, creds, cfg.symbol);
   } catch (e) {
-    await botLog(userId, "warn", `syncFills skipped: ${(e as Error).message.slice(0, 160)}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `syncFills skipped: ${(e as Error).message.slice(0, 160)}`,
+      cfg.symbol,
+    );
   }
 
   try {
     const closed = await maybeTakeProfit(userId, creds, cfg);
     if (closed) return;
   } catch (e) {
-    await botLog(userId, "warn", `take-profit check: ${(e as Error).message.slice(0, 160)}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `take-profit check: ${(e as Error).message.slice(0, 160)}`,
+      cfg.symbol,
+    );
   }
 
   try {
     const stopped = await maybeStopLoss(userId, creds, cfg);
     if (stopped) return;
   } catch (e) {
-    await botLog(userId, "warn", `stop-loss check: ${(e as Error).message.slice(0, 160)}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `stop-loss check: ${(e as Error).message.slice(0, 160)}`,
+      cfg.symbol,
+    );
   }
-
 
   const mp = await binance.markPrice(creds, cfg.symbol);
   const mark = parseFloat(mp.markPrice);
@@ -626,6 +738,10 @@ async function reconcileSymbolLocked(
     blockBuyAdds = true;
     blockSellAdds = true;
   }
+  if (entriesBlocked) {
+    blockBuyAdds = true;
+    blockSellAdds = true;
+  }
 
   // Extreme-loss cooldown: after a single realized fill at or below the
   // configured loss threshold, pause new entries for this symbol for the
@@ -637,7 +753,7 @@ async function reconcileSymbolLocked(
     const cooldownMin = Number(cfg.extreme_loss_cooldown_min ?? 0);
     if (lossThreshold < 0 && cooldownMin > 0) {
       const sinceIso = new Date(Date.now() - cooldownMin * 60_000).toISOString();
-      const { data: badFill } = await supabaseAdmin
+      const { data: badFill } = await remoteDb
         .from("trades")
         .select("realized_pnl,filled_at")
         .eq("user_id", userId)
@@ -690,7 +806,12 @@ async function reconcileSymbolLocked(
           );
         }
       } catch (e) {
-        await botLog(userId, "warn", `funding filter: ${(e as Error).message.slice(0, 160)}`, cfg.symbol);
+        await botLog(
+          userId,
+          "warn",
+          `funding filter: ${(e as Error).message.slice(0, 160)}`,
+          cfg.symbol,
+        );
       }
     }
   }
@@ -706,26 +827,42 @@ async function reconcileSymbolLocked(
     const threshold = Math.max(0, Number(cfg.z_entry_threshold ?? 1.5));
     const z = await getPriceZScore(creds, cfg.symbol, interval, lookback, mark);
     if (z == null) {
-      await botLog(userId, "warn", `Z-filter: not enough ${interval} data (need ${lookback}). Skipping filter.`, cfg.symbol);
+      await botLog(
+        userId,
+        "warn",
+        `Z-filter: not enough ${interval} data (need ${lookback}). Skipping filter.`,
+        cfg.symbol,
+      );
     } else if (threshold > 0) {
       const absZ = Math.abs(z);
       if (absZ < threshold) {
         blockBuyAdds = true;
         blockSellAdds = true;
-        await botLog(userId, "info", `Z-filter: z=${z.toFixed(2)} within ±${threshold} (no mean-reversion edge). Pausing both sides.`, cfg.symbol);
+        await botLog(
+          userId,
+          "info",
+          `Z-filter: z=${z.toFixed(2)} within ±${threshold} (no mean-reversion edge). Pausing both sides.`,
+          cfg.symbol,
+        );
       } else if (z > 0) {
         blockBuyAdds = true;
-        await botLog(userId, "info", `Z-filter: z=${z.toFixed(2)} > +${threshold} (overbought). Pausing new BUY entries.`, cfg.symbol);
+        await botLog(
+          userId,
+          "info",
+          `Z-filter: z=${z.toFixed(2)} > +${threshold} (overbought). Pausing new BUY entries.`,
+          cfg.symbol,
+        );
       } else {
         blockSellAdds = true;
-        await botLog(userId, "info", `Z-filter: z=${z.toFixed(2)} < -${threshold} (oversold). Pausing new SELL entries.`, cfg.symbol);
+        await botLog(
+          userId,
+          "info",
+          `Z-filter: z=${z.toFixed(2)} < -${threshold} (oversold). Pausing new SELL entries.`,
+          cfg.symbol,
+        );
       }
     }
   }
-
-
-
-
 
   // Trend bias drives SKEW, not a block. (Grids are mean-reversion tools;
   // hard-blocking counter-trend entries turned this into a momentum chaser
@@ -734,11 +871,16 @@ async function reconcileSymbolLocked(
   if (cfg.trend_filter_enabled ?? true) {
     const interval = cfg.trend_interval ?? "1h";
     const period = Math.max(5, Number(cfg.trend_ema_period ?? 50));
-    const bias = await getTrendBias(creds, cfg.symbol, interval, period, mark, session.flatThresholdPct);
+    const bias = await getTrendBias(
+      creds,
+      cfg.symbol,
+      interval,
+      period,
+      mark,
+      session.flatThresholdPct,
+    );
     trendBias = bias ?? "flat";
   }
-
-
 
   // Position guard: enforce one-position-per-symbol and liquidation safety.
   // Also captures inventory for the inventory-relative skew below.
@@ -755,8 +897,9 @@ async function reconcileSymbolLocked(
       positionEntryPrice = Number(pos.entryPrice) || mark;
       positionLeverage = Math.max(1, Number(pos.leverage) || Number(cfg.leverage) || 1);
       positionNotional = Math.abs(amt) * (Number(pos.markPrice) || mark);
-      // One-position-per-symbol rule: never add to an existing position.
-      // Only keep opposite-side maker exits live so the grid can close it.
+      // Fee-control mode: once a position is open, stop adding more entries.
+      // Keep only reduce-only exits live so entry fees are not stacked while
+      // realized PnL is still zero.
       if (amt > 0) blockBuyAdds = true;
       else blockSellAdds = true;
 
@@ -781,18 +924,21 @@ async function reconcileSymbolLocked(
       await botLog(
         userId,
         "info",
-        `Position open (${amt > 0 ? "LONG" : "SHORT"} ${Math.abs(amt)}). Skipping new ${amt > 0 ? "BUY" : "SELL"} entries — only maker exits stay live.`,
+        `Position open (${amt > 0 ? "LONG" : "SHORT"} ${Math.abs(amt)}). Pausing new ${amt > 0 ? "BUY" : "SELL"} entries to avoid stacking fees; only reduce-only exits stay live.`,
         cfg.symbol,
       );
     }
   } catch (e) {
-    await botLog(userId, "warn", `position/liq guard: ${(e as Error).message.slice(0, 160)}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `position/liq guard: ${(e as Error).message.slice(0, 160)}`,
+      cfg.symbol,
+    );
   }
 
-
   const outOfRange =
-    (cfg.lower_bound && mark < cfg.lower_bound) ||
-    (cfg.upper_bound && mark > cfg.upper_bound);
+    (cfg.lower_bound && mark < cfg.lower_bound) || (cfg.upper_bound && mark > cfg.upper_bound);
   if (outOfRange) {
     if (positionAmt !== 0) {
       blockBuyAdds = true;
@@ -826,9 +972,6 @@ async function reconcileSymbolLocked(
     await botLog(userId, "warn", `setLeverage: ${(e as Error).message}`, cfg.symbol);
   }
 
-
-
-
   // ===== Adaptive grid positioning =====
   // Scale spacing with realized volatility (ATR%), tighten/loosen by session,
   // and skew the grid in the direction of the trend so we buy pullbacks
@@ -840,22 +983,56 @@ async function reconcileSymbolLocked(
   // edge; LLM-injected spacing/size flips added tail risk without proven
   // alpha. Drawdown circuit-breaker and news blackout still gate the bot.)
 
-
   // Volatility-adjusted sizing ("Kelly lite"): shrink order size when realized
   // vol exceeds the user's baseline spacing — high-ATR symbols shouldn't
   // burn margin faster than low-ATR ones just because spacing is wider.
   const targetAtr = Math.max(0.05, baseSpacing);
   const sizeMult = atrPct ? Math.max(0.4, Math.min(1.0, targetAtr / atrPct)) : 1.0;
   const f = await getSymbolFilters(creds, cfg.symbol);
+  if (positionAmt !== 0 && positionNotional > 0 && positionNotional < DUST_POSITION_NOTIONAL_USDT) {
+    await botLog(
+      userId,
+      "warn",
+      `Dust position ${Math.abs(positionAmt)} (~${positionNotional.toFixed(2)} USDT) below ${DUST_POSITION_NOTIONAL_USDT} USDT. Closing it instead of placing tiny TP orders.`,
+      cfg.symbol,
+    );
+    try {
+      await closePositionAndCancel(userId, creds, cfg.symbol);
+    } catch (e) {
+      await botLog(userId, "error", `dust close: ${(e as Error).message}`, cfg.symbol);
+    }
+    return;
+  }
   const rawOrderSize = cfg.order_size_usdt * sizeMult;
-  const effectiveOrderSize = Math.max(rawOrderSize, f.minNotional * 1.1);
-  const qty = roundStep(effectiveOrderSize / mark, f.stepSize, f.quantityPrecision);
+  const configuredMinOrder = Math.max(0, Number(cfg.min_order_size_usdt ?? 0));
+  const minEntryNotional = Math.max(configuredMinOrder, f.minNotional * 1.1);
+  const effectiveOrderSize = Math.max(rawOrderSize, minEntryNotional);
+  const qty = roundStepUp(effectiveOrderSize / mark, f.stepSize, f.quantityPrecision);
   if (qty < f.minQty) {
-    await botLog(userId, "warn", `Computed qty ${qty} < minQty ${f.minQty} (after size×${sizeMult.toFixed(2)})`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `Computed qty ${qty} < minQty ${f.minQty} (after size×${sizeMult.toFixed(2)})`,
+      cfg.symbol,
+    );
+    return;
+  }
+  if (qty * mark < minEntryNotional) {
+    await botLog(
+      userId,
+      "warn",
+      `Computed notional ${(qty * mark).toFixed(2)} < min entry ${minEntryNotional.toFixed(2)}`,
+      cfg.symbol,
+    );
     return;
   }
   if (qty * mark < f.minNotional) {
-    await botLog(userId, "warn", `Computed notional ${(qty * mark).toFixed(2)} < minNotional ${f.minNotional}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `Computed notional ${(qty * mark).toFixed(2)} < minNotional ${f.minNotional}`,
+      cfg.symbol,
+    );
     return;
   }
 
@@ -866,15 +1043,15 @@ async function reconcileSymbolLocked(
 
   // Trend-based center shift (mild bias, not dislocation).
   const trendCenterPct =
-    trendBias === "up" ? baseSpacing * 0.25 :
-    trendBias === "down" ? -baseSpacing * 0.25 : 0;
+    trendBias === "up" ? baseSpacing * 0.25 : trendBias === "down" ? -baseSpacing * 0.25 : 0;
 
   // Inventory-relative center shift (Avellaneda–Stoikov style). As position
   // notional approaches the per-symbol cap, push center against the position
   // so opposite-side exits move closer to mark and fill sooner.
-  const invRatio = maxNotional > 0 && positionNotional > 0
-    ? Math.max(-1, Math.min(1, (positionAmt > 0 ? -1 : 1) * (positionNotional / maxNotional)))
-    : 0;
+  const invRatio =
+    maxNotional > 0 && positionNotional > 0
+      ? Math.max(-1, Math.min(1, (positionAmt > 0 ? -1 : 1) * (positionNotional / maxNotional)))
+      : 0;
   const invCenterPct = invRatio * baseSpacing * 0.75;
 
   const centerShiftPct = trendCenterPct + invCenterPct;
@@ -887,11 +1064,17 @@ async function reconcileSymbolLocked(
     cfg.symbol,
   );
 
-  const desired: Array<{ side: "BUY" | "SELL"; price: number; level: number; quantity: number; reduceOnly?: boolean }> = [];
+  const desired: Array<{
+    side: "BUY" | "SELL";
+    price: number;
+    level: number;
+    quantity: number;
+    reduceOnly?: boolean;
+  }> = [];
   const protective: Array<{
     clientOrderId: string;
     side: "BUY" | "SELL";
-    type: "STOP";
+    type: "STOP" | "STOP_MARKET";
     stopPrice: number;
     quantity: number;
   }> = [];
@@ -902,7 +1085,7 @@ async function reconcileSymbolLocked(
   // That gives the bot a deterministic closing plan even if mark/center shifts
   // around after entry.
   if (positionAmt !== 0 && positionEntryPrice > 0) {
-    const feePctBuffer = 0.10; // cover round-trip fees/slippage before net profit target
+    const feePctBuffer = 0.1; // cover round-trip fees/slippage before net profit target
     const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
     if (closeQty >= f.minQty) {
       const tpPx = roundStep(
@@ -916,7 +1099,7 @@ async function reconcileSymbolLocked(
         desired.push({ side: "BUY", price: tpPx, level: -1, quantity: closeQty, reduceOnly: true });
       }
 
-      const stopRoi = Number(cfg.stop_loss_roi_pct ?? 0);
+      const stopRoi = effectiveStopLossRoi(cfg.stop_loss_roi_pct);
       if (stopRoi < 0) {
         const stopPx = roundStep(
           stopLossTargetPrice(positionEntryPrice, positionAmt, stopRoi, positionLeverage),
@@ -926,7 +1109,7 @@ async function reconcileSymbolLocked(
         protective.push({
           clientOrderId: `protect_sl_${cfg.symbol}`,
           side: positionAmt > 0 ? "SELL" : "BUY",
-          type: "STOP",
+          type: "STOP_MARKET",
           stopPrice: stopPx,
           quantity: closeQty,
         });
@@ -935,8 +1118,8 @@ async function reconcileSymbolLocked(
   }
 
   for (let i = 1; i <= levels; i++) {
-    const buySpacing = (baseSpacing * volMult * sessMult * buySkew / 100) * i;
-    const sellSpacing = (baseSpacing * volMult * sessMult * sellSkew / 100) * i;
+    const buySpacing = ((baseSpacing * volMult * sessMult * buySkew) / 100) * i;
+    const sellSpacing = ((baseSpacing * volMult * sessMult * sellSkew) / 100) * i;
     const buyPx = roundStep(center * (1 - buySpacing), f.tickSize, f.pricePrecision);
     const sellPx = roundStep(center * (1 + sellSpacing), f.tickSize, f.pricePrecision);
     if (cfg.single_grid_order) {
@@ -945,46 +1128,152 @@ async function reconcileSymbolLocked(
       } else if (positionAmt < 0 && !blockBuyAdds) {
         // Dedicated entry-price TP above already owns the close plan.
       } else if (!blockBuyAdds) {
-        desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+        const plannedStop = roundStep(
+          stopLossTargetPrice(
+            buyPx,
+            qty,
+            effectiveStopLossRoi(cfg.stop_loss_roi_pct),
+            Math.max(1, Number(cfg.leverage ?? 1)),
+          ),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        const plannedTp = roundStep(
+          closeTargetPrice(buyPx, qty, cfg.grid_spacing_pct, 0.1),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        if (plannedStop <= 0 || plannedTp <= 0 || plannedStop >= buyPx || plannedTp <= buyPx) {
+          await botLog(
+            userId,
+            "warn",
+            "Entry rejected: invalid planned BUY stop-loss/take-profit prices.",
+            cfg.symbol,
+          );
+        } else {
+          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+        }
       } else if (!blockSellAdds) {
-        desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+        const plannedStop = roundStep(
+          stopLossTargetPrice(
+            sellPx,
+            -qty,
+            effectiveStopLossRoi(cfg.stop_loss_roi_pct),
+            Math.max(1, Number(cfg.leverage ?? 1)),
+          ),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        const plannedTp = roundStep(
+          closeTargetPrice(sellPx, -qty, cfg.grid_spacing_pct, 0.1),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        if (plannedStop <= 0 || plannedTp <= 0 || plannedStop <= sellPx || plannedTp >= sellPx) {
+          await botLog(
+            userId,
+            "warn",
+            "Entry rejected: invalid planned SELL stop-loss/take-profit prices.",
+            cfg.symbol,
+          );
+        } else {
+          desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+        }
       }
     } else {
-      if (!blockBuyAdds) desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
-      if (!blockSellAdds && positionAmt === 0) desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+      const allowBuyEntry = positionAmt >= 0 && !blockBuyAdds;
+      const allowSellEntry = positionAmt <= 0 && !blockSellAdds;
+      if (allowBuyEntry) {
+        const plannedStop = roundStep(
+          stopLossTargetPrice(
+            buyPx,
+            qty,
+            effectiveStopLossRoi(cfg.stop_loss_roi_pct),
+            Math.max(1, Number(cfg.leverage ?? 1)),
+          ),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        const plannedTp = roundStep(
+          closeTargetPrice(buyPx, qty, cfg.grid_spacing_pct, 0.1),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        if (plannedStop <= 0 || plannedTp <= 0 || plannedStop >= buyPx || plannedTp <= buyPx) {
+          await botLog(
+            userId,
+            "warn",
+            "Entry rejected: invalid planned BUY stop-loss/take-profit prices.",
+            cfg.symbol,
+          );
+        } else {
+          desired.push({ side: "BUY", price: buyPx, level: -i, quantity: qty });
+        }
+      }
+      if (allowSellEntry) {
+        const plannedStop = roundStep(
+          stopLossTargetPrice(
+            sellPx,
+            -qty,
+            effectiveStopLossRoi(cfg.stop_loss_roi_pct),
+            Math.max(1, Number(cfg.leverage ?? 1)),
+          ),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        const plannedTp = roundStep(
+          closeTargetPrice(sellPx, -qty, cfg.grid_spacing_pct, 0.1),
+          f.tickSize,
+          f.pricePrecision,
+        );
+        if (plannedStop <= 0 || plannedTp <= 0 || plannedStop <= sellPx || plannedTp >= sellPx) {
+          await botLog(
+            userId,
+            "warn",
+            "Entry rejected: invalid planned SELL stop-loss/take-profit prices.",
+            cfg.symbol,
+          );
+        } else {
+          desired.push({ side: "SELL", price: sellPx, level: i, quantity: qty });
+        }
+      }
     }
   }
-
-
-
-
-
 
   let globalExposure = 0;
   try {
     globalExposure = await getGlobalExposure(creds);
   } catch (e) {
-    await botLog(userId, "warn", `global exposure read failed: ${(e as Error).message}`, cfg.symbol);
+    await botLog(
+      userId,
+      "warn",
+      `global exposure read failed: ${(e as Error).message}`,
+      cfg.symbol,
+    );
   }
   const perOrderNotional = qty * mark;
   const remainingBudget = Math.max(0, maxNotional - globalExposure);
   const maxFit = perOrderNotional > 0 ? Math.floor(remainingBudget / perOrderNotional) : 0;
-  if (cfg.single_grid_order && desired.length > 1) {
-    desired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
-    desired.length = 1;
-  } else if (!cfg.single_grid_order && maxFit < desired.length) {
+  const reduceOnlyDesired = desired.filter((d) => d.reduceOnly);
+  let entryDesired = desired.filter((d) => !d.reduceOnly);
+  if (cfg.single_grid_order && entryDesired.length > 1) {
+    entryDesired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
+    entryDesired = entryDesired.slice(0, 1);
+  }
+  if (maxFit < entryDesired.length) {
     // Keep closest-to-mark levels first (smallest |level|), alternating sides.
-    desired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
-    const trimmed = desired.slice(0, maxFit);
+    entryDesired.sort((a, b) => Math.abs(a.level) - Math.abs(b.level));
+    const trimmed = entryDesired.slice(0, maxFit);
     await botLog(
       userId,
       maxFit === 0 ? "warn" : "info",
-      `Exposure ${globalExposure.toFixed(2)}/${maxNotional}: fitting ${maxFit}/${desired.length} levels (~${perOrderNotional.toFixed(2)} each, budget ${remainingBudget.toFixed(2)}).`,
+      `Exposure ${globalExposure.toFixed(2)}/${maxNotional}: fitting ${maxFit}/${entryDesired.length} entry levels (~${perOrderNotional.toFixed(2)} each, budget ${remainingBudget.toFixed(2)}).`,
       cfg.symbol,
     );
-    desired.length = 0;
-    desired.push(...trimmed);
+    entryDesired = trimmed;
   }
+  desired.length = 0;
+  desired.push(...reduceOnlyDesired, ...entryDesired);
 
   const open = await binance.openOrders(creds, cfg.symbol).catch((e) => {
     if (creds.testnet && isBinanceNetworkBlock(e)) {
@@ -1000,14 +1289,17 @@ async function reconcileSymbolLocked(
   });
   const liveByLevel = new Map<string, any>();
   const liveProtective = new Map<string, any>();
+  const liveProtectiveOrders: any[] = [];
   for (const o of open) {
     if (o.clientOrderId?.startsWith(`grid_${cfg.symbol}_`)) {
       liveByLevel.set(o.clientOrderId, o);
     }
   }
   for (const o of openAlgo) {
-    if (o.clientAlgoId?.startsWith(`protect_`)) {
-      liveProtective.set(o.clientAlgoId, o);
+    const cid = String(o.clientAlgoId ?? o.clientOrderId ?? "");
+    if (cid.startsWith(`protect_`)) {
+      liveProtective.set(cid, o);
+      liveProtectiveOrders.push(o);
     }
   }
 
@@ -1016,7 +1308,7 @@ async function reconcileSymbolLocked(
     if (!desiredCids.has(cid)) {
       try {
         await binance.cancelOrder(creds, cfg.symbol, o.orderId);
-        await supabaseAdmin
+        await remoteDb
           .from("grid_orders")
           .update({ status: "CANCELED" })
           .eq("user_id", userId)
@@ -1033,7 +1325,12 @@ async function reconcileSymbolLocked(
       try {
         await binance.cancelAlgoOrder(creds, cid);
       } catch (e) {
-        await botLog(userId, "warn", `cancel protective ${cid}: ${(e as Error).message}`, cfg.symbol);
+        await botLog(
+          userId,
+          "warn",
+          `cancel protective ${cid}: ${(e as Error).message}`,
+          cfg.symbol,
+        );
       }
     }
   }
@@ -1050,7 +1347,12 @@ async function reconcileSymbolLocked(
       try {
         await binance.cancelOrder(creds, cfg.symbol, live.orderId);
       } catch (e) {
-        await botLog(userId, "warn", `replace-cancel ${live.orderId}: ${(e as Error).message}`, cfg.symbol);
+        await botLog(
+          userId,
+          "warn",
+          `replace-cancel ${live.orderId}: ${(e as Error).message}`,
+          cfg.symbol,
+        );
         continue;
       }
     }
@@ -1065,7 +1367,7 @@ async function reconcileSymbolLocked(
         reduceOnly: d.reduceOnly,
         newClientOrderId: cid,
       });
-      await supabaseAdmin.from("grid_orders").insert({
+      await remoteDb.from("grid_orders").insert({
         user_id: userId,
         symbol: cfg.symbol,
         side: d.side,
@@ -1092,18 +1394,32 @@ async function reconcileSymbolLocked(
     }
   }
 
+  const sameProtectiveOrder = (live: any, p: (typeof protective)[number]) => {
+    const liveStop = Number(live.triggerPrice ?? live.stopPrice ?? live.price ?? 0);
+    const sameStop = Math.abs(liveStop - p.stopPrice) < Math.max(f.tickSize / 2, 1e-9);
+    const sameSide = String(live.side) === p.side;
+    const liveType = String(live.type ?? live.orderType ?? "");
+    const sameType = liveType === p.type || liveType === "CONDITIONAL" || liveType === "";
+    const liveQty = Number(live.origQty ?? live.quantity ?? live.origQuantity ?? 0);
+    const sameQty = Math.abs(liveQty - p.quantity) < Math.max(f.stepSize / 2, 1e-9);
+    return sameStop && sameSide && sameType && sameQty;
+  };
+
   for (const p of protective) {
-    const live = liveProtective.get(p.clientOrderId);
+    const live =
+      liveProtective.get(p.clientOrderId) ??
+      liveProtectiveOrders.find((order) => sameProtectiveOrder(order, p));
     if (live) {
-      const liveStop = Number(live.triggerPrice ?? live.stopPrice ?? 0);
-      const sameStop = Math.abs(liveStop - p.stopPrice) < Math.max(f.tickSize / 2, 1e-9);
-      const sameSide = String(live.side) === p.side;
-      const sameType = String(live.type) === p.type;
-      if (sameStop && sameSide && sameType) continue;
+      if (sameProtectiveOrder(live, p)) continue;
       try {
         await binance.cancelAlgoOrder(creds, p.clientOrderId);
       } catch (e) {
-        await botLog(userId, "warn", `replace protective ${p.clientOrderId}: ${(e as Error).message}`, cfg.symbol);
+        await botLog(
+          userId,
+          "warn",
+          `replace protective ${p.clientOrderId}: ${(e as Error).message}`,
+          cfg.symbol,
+        );
         continue;
       }
     }
@@ -1114,21 +1430,26 @@ async function reconcileSymbolLocked(
         side: p.side,
         type: p.type,
         quantity: p.quantity,
-        price: p.stopPrice,
+        price: p.type === "STOP_MARKET" ? undefined : p.stopPrice,
         triggerPrice: p.stopPrice,
         workingType: "MARK_PRICE",
         reduceOnly: true,
-        timeInForce: "GTC",
+        timeInForce: p.type === "STOP_MARKET" ? undefined : "GTC",
         clientAlgoId: p.clientOrderId,
       });
       await botLog(
         userId,
         "info",
-        `Attached stop-loss ${p.side} stop-limit @ ${p.stopPrice}.`,
+        `Attached stop-loss ${p.side} stop-market @ ${p.stopPrice}.`,
         cfg.symbol,
       );
     } catch (e) {
-      await botLog(userId, "warn", `place protective ${p.side} stop@${p.stopPrice}: ${(e as Error).message}`, cfg.symbol);
+      await botLog(
+        userId,
+        "warn",
+        `place protective ${p.side} stop@${p.stopPrice}: ${(e as Error).message}`,
+        cfg.symbol,
+      );
     }
   }
 }
