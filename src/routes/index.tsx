@@ -974,6 +974,28 @@ function Dashboard() {
                   </Button>
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="maxopen">Max open trades</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="maxopen"
+                      type="number"
+                      min={1}
+                      max={4}
+                      defaultValue={cfg?.max_open_trades ?? (cfg?.testnet ? 4 : 1)}
+                      onBlur={async (e) => {
+                        const v = parseInt(e.target.value);
+                        if (v >= 1 && v <= 4) {
+                          await setIntelligence({ data: { max_open_trades: v } });
+                          toast.success("Saved");
+                        }
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Live defaults to 1 open trade; testnet stays at 4.
+                  </p>
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="maxexp">Max total notional (USDT)</Label>
                   <div className="flex gap-2">
                     <Input

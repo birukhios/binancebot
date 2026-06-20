@@ -812,7 +812,11 @@ export const setTestnet = createServerFn({ method: "POST" })
   .inputValidator((d: { testnet: boolean }) => z.object({ testnet: z.boolean() }).parse(d))
   .handler(async ({ data, context }) => {
     if (!hasRemoteDb()) {
-      updateLocalBotConfig(context.userId, { testnet: data.testnet, is_running: false });
+      updateLocalBotConfig(context.userId, {
+        testnet: data.testnet,
+        is_running: false,
+        max_open_trades: data.testnet ? 4 : 1,
+      });
       addLocalLog(
         context.userId,
         "warn",
@@ -823,7 +827,12 @@ export const setTestnet = createServerFn({ method: "POST" })
 
     await remoteDb
       .from("bot_config")
-      .update({ testnet: data.testnet, is_running: false, updated_at: new Date().toISOString() })
+      .update({
+        testnet: data.testnet,
+        is_running: false,
+        max_open_trades: data.testnet ? 4 : 1,
+        updated_at: new Date().toISOString(),
+      })
       .eq("user_id", context.userId);
     await botLog(
       context.userId,
@@ -854,6 +863,7 @@ const intelligenceSchema = z.object({
   auto_select_enabled: z.boolean().optional(),
   auto_select_max_symbols: z.number().int().min(1).max(15).optional(),
   drawdown_pause_pct: z.number().min(0).max(50).optional(),
+  max_open_trades: z.number().int().min(1).max(4).optional(),
   news_pause_enabled: z.boolean().optional(),
   news_pause_window_min: z.number().int().min(0).max(240).optional(),
   news_currencies: z.string().max(64).optional(),
