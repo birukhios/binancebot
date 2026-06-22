@@ -921,6 +921,32 @@ async function reconcileSymbolLocked(
       session.flatThresholdPct,
     );
     trendBias = bias ?? "flat";
+
+    // Trade WITH the trend, not against it. Previously the bias only skewed
+    // order sizes, so in a downtrend the bot still bought every dip and kept
+    // accumulating losing longs (the cause of the very low win rate). Now we
+    // block the counter-trend side: in a downtrend only shorts are opened, in
+    // an uptrend only longs. In a flat/ranging market both sides stay active so
+    // the grid still captures oscillation.
+    if (trendBias === "down") {
+      blockBuyAdds = true;
+      await botLog(
+        userId,
+        "info",
+        `Trend filter: downtrend — blocking new BUY entries, trading short side only.`,
+        cfg.symbol,
+        { dedupeKey: "trend-block-buy", dedupeWindowMs: 5 * 60 * 1000 },
+      );
+    } else if (trendBias === "up") {
+      blockSellAdds = true;
+      await botLog(
+        userId,
+        "info",
+        `Trend filter: uptrend — blocking new SELL entries, trading long side only.`,
+        cfg.symbol,
+        { dedupeKey: "trend-block-sell", dedupeWindowMs: 5 * 60 * 1000 },
+      );
+    }
   }
 
   // Position guard: enforce one-position-per-symbol and liquidation safety.
