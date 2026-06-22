@@ -105,7 +105,9 @@ export async function runLocalBotTick(userId: string) {
       ? Math.min(configuredCap, botCapital)
       : botCapital
     : botCapital;
-  updateLocalBotConfig(userId, { max_total_notional_usdt: effectiveCapital });
+  const smallWallet = effectiveCapital < 50;
+  const leveragedCapital = smallWallet ? effectiveCapital * 10 : effectiveCapital;
+  updateLocalBotConfig(userId, { max_total_notional_usdt: leveragedCapital });
   const paperHighRisk = state.cfg.risk_profile === PAPER_HIGH_RISK_PROFILE;
   if (paperHighRisk) {
     const startEquity = Number(state.cfg.paper_start_equity_usdt ?? 0);
@@ -177,7 +179,7 @@ export async function runLocalBotTick(userId: string) {
     Math.floor(Number(state.cfg.consecutive_loss_pause_count ?? 3)),
   );
   const liveMinOrderUsdt = 5;
-  const smallAccount = effectiveCapital < 50;
+  const smallAccount = smallWallet;
   const minOrderFloor = smallAccount ? liveMinOrderUsdt : testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt;
   const btcOrderSize = paperHighRisk
     ? Math.max(BTC_MIN_ORDER_USDT, effectiveCapital / 2)
