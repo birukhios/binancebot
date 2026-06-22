@@ -292,7 +292,7 @@ export async function runLocalBotTick(userId: string) {
     order_size_usdt: btcOrderSize,
     min_order_size_usdt: smallAccount ? liveMinOrderUsdt : minOrderFloor,
     max_order_size_usdt: Math.max(smallAccount ? liveMinOrderUsdt : minOrderFloor, btcOrderSize * 2),
-    grid_spacing_pct: smallAccount ? 0.15 : paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5,
+    grid_spacing_pct: smallAccount ? 0.12 : paperHighRisk ? 0.18 : testnet ? 0.2 : 0.25,
     leverage: targetLeverage,
     // Base stop scaled to leverage (≈ −1% price move). normalize re-derives this
     // authoritatively; set here so the value is sane before normalization.

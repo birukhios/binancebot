@@ -44,11 +44,14 @@ const LIQUIDATION_HARD_PCT = 5;
 const LIQUIDATION_SOFT_PCT = 10;
 const DEFAULT_STOP_LOSS_ROI_PCT = -15;
 const DUST_POSITION_NOTIONAL_USDT = 25;
-// Take-profit at ~0.85x the grid spacing: large enough to clear round-trip
-// fees and provide real reward versus the stop (was 0.20, which scalped moves
-// smaller than the fees and guaranteed a slow bleed).
+// Fast small-profit scalping comes from TIGHT SPACING (close, frequent exits),
+// not from a sub-spacing TP. The TP is kept aligned with the resting maker grid
+// exit (~0.85x spacing) so positions close as cheap MAKER fills instead of
+// triggering an expensive taker market close before the maker order fills.
 const TAKE_PROFIT_SPACING_MULT = 0.85;
-const TAKE_PROFIT_FEE_BUFFER_PCT = 0.04;
+// Guarantees each take-profit clears the maker round-trip fee (~0.04%) with a
+// real margin on top, so scalps are reliably net-positive after fees.
+const TAKE_PROFIT_FEE_BUFFER_PCT = 0.055;
 const GRID_ORDER_MIN_LIFETIME_MS = 90_000;
 const GRID_REPRICE_TOLERANCE_MULT = 0.35;
 const FRONT_LEVEL_SPACING_MULT = 0.25;
@@ -1049,7 +1052,10 @@ async function reconcileSymbolLocked(
   );
   const minEntryNotional = Math.max(configuredMinOrder, f.minNotional * 1.1);
 
-  const volMult = atrPct ? Math.max(0.6, Math.min(2.0, atrPct / baseSpacing)) : 1.0;
+  // Cap the volatility widening at 1.25× so the grid stays tight and trades
+  // close quickly (was 2.0×, which pushed exits ~0.8% away and made positions
+  // sit for a long time). Fast small-profit scalping wants close exits.
+  const volMult = atrPct ? Math.max(0.6, Math.min(1.25, atrPct / baseSpacing)) : 1.0;
   const sessMult = sessionSpacingMult(session.name);
   const buySkew = trendBias === "up" ? 0.75 : trendBias === "down" ? 1.25 : 1.0;
   const sellSkew = trendBias === "down" ? 0.75 : trendBias === "up" ? 1.25 : 1.0;

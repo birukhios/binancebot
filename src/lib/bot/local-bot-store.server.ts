@@ -204,7 +204,8 @@ function normalizeUserStore(user: LocalUserStore) {
         symbol.enabled = true;
         symbol.grid_levels = paperHighRisk ? 3 : testnet ? BTC_GRID_LEVELS : 1;
         symbol.single_grid_order = !paperHighRisk && !testnet;
-        symbol.grid_spacing_pct = paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5;
+        // Tight spacing for fast small-profit scalping (close, frequent exits).
+        symbol.grid_spacing_pct = paperHighRisk ? 0.18 : testnet ? 0.2 : 0.25;
         symbol.order_size_usdt = paperHighRisk
           ? Math.max(500, Number(symbol.order_size_usdt ?? 0))
           : Math.max(testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt, Number(symbol.order_size_usdt ?? 0));
@@ -242,12 +243,12 @@ function normalizeUserStore(user: LocalUserStore) {
         // Allow leverage-scaled stops (−1% move × up to 25× → −25% ROI) while
         // keeping a hard floor that still sits inside the liquidation threshold.
         symbol.stop_loss_roi_pct = clampNum(symbol.stop_loss_roi_pct * stopMult, -70, -3);
-        // TP must clear fees and provide real reward vs the stop: keep it at
-        // 0.5–1.2× the grid spacing (never scalp sub-fee moves).
+        // Keep TP aligned with the maker grid exit so closes stay cheap (maker)
+        // fills. Speed comes from tight spacing, not a sub-spacing TP.
         symbol.take_profit_spacing_mult = clampNum(
           Number(symbol.take_profit_spacing_mult ?? 0.85) || 0.85,
-          0.5,
-          1.2,
+          0.6,
+          1.1,
         );
         symbol.order_size_usdt = Math.max(
           Number(symbol.min_order_size_usdt ?? 0),
