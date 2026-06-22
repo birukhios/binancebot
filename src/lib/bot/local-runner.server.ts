@@ -92,7 +92,7 @@ export async function runLocalBotTick(userId: string) {
   const account = await binance.account(creds);
   const walletBalance = Math.max(
     0,
-    Number(account.availableBalance ?? account.totalWalletBalance ?? 0),
+    Number(account.totalWalletBalance ?? account.availableBalance ?? 0),
   );
   const totalEquity = walletBalance + Number(account.totalUnrealizedProfit ?? 0);
   const botCapitalPct = testnet
