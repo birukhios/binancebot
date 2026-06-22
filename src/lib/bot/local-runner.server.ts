@@ -122,6 +122,23 @@ async function dailyPnl(
     return sum + Number(row.income ?? 0);
   }, 0);
   const adjustedRealized = adjustTestnetRealizedToday(userId, realized);
+  // Diagnostic: break the day's PnL down by source so we can see whether the
+  // bleed is trading losses, fees (churn) or funding.
+  const byType = (t: string) =>
+    income
+      .filter((r: any) => String(r.incomeType ?? "") === t)
+      .reduce((s: number, r: any) => s + Number(r.income ?? 0), 0);
+  const rPnl = byType("REALIZED_PNL");
+  const comm = byType("COMMISSION");
+  const fund = byType("FUNDING_FEE");
+  const nFills = income.filter((r: any) => String(r.incomeType ?? "") === "REALIZED_PNL").length;
+  addLocalLog(
+    userId,
+    "info",
+    `PnL breakdown today: trades ${rPnl.toFixed(4)} (${nFills} closes), fees ${comm.toFixed(4)}, funding ${fund.toFixed(4)} → net ${(rPnl + comm + fund).toFixed(4)} USDT`,
+    BTC_SYMBOL,
+    { dedupeKey: "pnl-breakdown", dedupeWindowMs: 5 * 60 * 1000 },
+  );
   const unrealized = openPositions.reduce((sum: number, p: any) => {
     if (Number(p.positionAmt) === 0) return sum;
     return sum + Number(p.unRealizedProfit ?? p.unrealizedProfit ?? 0);
