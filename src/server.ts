@@ -1,4 +1,5 @@
 import "./lib/error-capture";
+import "./lib/bot/local-runner.server";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
