@@ -44,8 +44,11 @@ const LIQUIDATION_HARD_PCT = 5;
 const LIQUIDATION_SOFT_PCT = 10;
 const DEFAULT_STOP_LOSS_ROI_PCT = -15;
 const DUST_POSITION_NOTIONAL_USDT = 25;
-const TAKE_PROFIT_SPACING_MULT = 0.20;
-const TAKE_PROFIT_FEE_BUFFER_PCT = 0.015;
+// Take-profit at ~0.85x the grid spacing: large enough to clear round-trip
+// fees and provide real reward versus the stop (was 0.20, which scalped moves
+// smaller than the fees and guaranteed a slow bleed).
+const TAKE_PROFIT_SPACING_MULT = 0.85;
+const TAKE_PROFIT_FEE_BUFFER_PCT = 0.04;
 const GRID_ORDER_MIN_LIFETIME_MS = 90_000;
 const GRID_REPRICE_TOLERANCE_MULT = 0.35;
 const FRONT_LEVEL_SPACING_MULT = 0.25;

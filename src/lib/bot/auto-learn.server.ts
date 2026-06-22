@@ -17,11 +17,13 @@ const MIN_FILLS_TO_ACT = 8;
 const LEARN_RATE = 0.34;
 
 // Base take-profit multiplier (mirrors grid.server TAKE_PROFIT_SPACING_MULT).
-const TP_BASE = 0.2;
+const TP_BASE = 0.85;
 
 const CLAMP = {
   spacing: [0.7, 1.6] as const,
-  tp: [0.12, 0.4] as const,
+  // Keep TP well above fees: never below 0.5x spacing. Lowering it toward the
+  // fee floor is a death spiral (tiny wins that fees erase).
+  tp: [0.5, 1.2] as const,
   stop: [0.7, 1.3] as const,
   size: [0.5, 1.0] as const,
 };
@@ -137,16 +139,15 @@ export async function maybeAutoLearn(
   if (winRate >= 0.6 && netPnl > 0) spacingTarget = 0.85;
   else if (winRate < 0.45 || netPnl < 0) spacingTarget = 1.35;
 
+  // Reward:risk is the lever here. When losing (PF < 1), the wins are too
+  // small versus the losses — let winners run FURTHER (bigger TP) so the
+  // average win can cover the average loss. Only when it is already winning
+  // comfortably do we tighten TP to bank more often.
   let tpTarget = TP_BASE;
-  if (winRate < 0.45) {
-    tpTarget = 0.15; // winners rare → bank quicker
-  } else if (profitFactor < 1.0) {
-    // High win rate but losing overall means the take-profit banks tiny gains
-    // while each stop loses far more. Let winners run much further so average
-    // win size catches up to average loss size.
-    tpTarget = 0.36;
-  } else if (winRate >= 0.62) {
-    tpTarget = 0.28; // winners frequent and profitable → let them run a bit
+  if (profitFactor < 1.0 || netPnl < 0) {
+    tpTarget = 1.1; // losing → widen TP, improve reward:risk
+  } else if (winRate >= 0.7 && profitFactor > 1.4) {
+    tpTarget = 0.7; // winning comfortably → bank a little quicker
   }
 
   let stopTarget = 1.0;

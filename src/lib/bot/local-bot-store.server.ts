@@ -36,11 +36,12 @@ const BTC_MIN_ORDER_USDT = 75;
 // Hard ceiling on leverage for safety. Stop-loss is scaled to leverage so the
 // position always exits well before the liquidation price.
 const MAX_LEVERAGE = 25;
-const DEFAULT_LEVERAGE = 25;
+const DEFAULT_LEVERAGE = 10;
 // Adverse price move (%) at which the stop fires, used to derive the ROI stop
-// from leverage: stopRoi ≈ -STOP_PRICE_MOVE_PCT × leverage. At 25× this is a
-// −1% move → −25% ROI, vs liquidation near a −3.8% move (−96% ROI).
-const STOP_PRICE_MOVE_PCT = 1.0;
+// from leverage: stopRoi ≈ -STOP_PRICE_MOVE_PCT × leverage. A tight stop kills
+// a grid — positions get cut just before they mean-revert. 1.8% gives room to
+// recover while staying inside liquidation (e.g. at 10× liquidation is ~-9.6%).
+const STOP_PRICE_MOVE_PCT = 1.8;
 export const PAPER_HIGH_RISK_PROFILE = "paper_high_risk";
 
 type LocalLogOptions = {
@@ -241,10 +242,12 @@ function normalizeUserStore(user: LocalUserStore) {
         // Allow leverage-scaled stops (−1% move × up to 25× → −25% ROI) while
         // keeping a hard floor that still sits inside the liquidation threshold.
         symbol.stop_loss_roi_pct = clampNum(symbol.stop_loss_roi_pct * stopMult, -70, -3);
+        // TP must clear fees and provide real reward vs the stop: keep it at
+        // 0.5–1.2× the grid spacing (never scalp sub-fee moves).
         symbol.take_profit_spacing_mult = clampNum(
-          Number(symbol.take_profit_spacing_mult ?? 0.2) || 0.2,
-          0.12,
-          0.4,
+          Number(symbol.take_profit_spacing_mult ?? 0.85) || 0.85,
+          0.5,
+          1.2,
         );
         symbol.order_size_usdt = Math.max(
           Number(symbol.min_order_size_usdt ?? 0),

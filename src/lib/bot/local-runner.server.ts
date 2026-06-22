@@ -161,7 +161,7 @@ export async function runLocalBotTick(userId: string) {
     : botCapital;
   const smallWallet = effectiveCapital < 50;
   // Leverage the bot trades at (configurable, capped at 25× by normalize).
-  const targetLeverage = Math.max(1, Math.min(25, Math.floor(Number(state.cfg.target_leverage ?? 25))));
+  const targetLeverage = Math.max(1, Math.min(25, Math.floor(Number(state.cfg.target_leverage ?? 10))));
   // BTCUSDT exchange minimum notional (~$5 base, but the grid enforces a ~$55
   // floor per order including the minNotional buffer).
   const EXCHANGE_MIN_NOTIONAL = 55;
@@ -279,7 +279,7 @@ export async function runLocalBotTick(userId: string) {
     leverage: targetLeverage,
     // Base stop scaled to leverage (≈ −1% price move). normalize re-derives this
     // authoritatively; set here so the value is sane before normalization.
-    stop_loss_roi_pct: -1.0 * targetLeverage,
+    stop_loss_roi_pct: -1.8 * targetLeverage,
     trend_filter_enabled: smallAccount ? false : Boolean(btcCfg?.trend_filter_enabled ?? true),
     funding_filter_enabled: smallAccount ? false : Boolean(btcCfg?.funding_filter_enabled ?? true),
     funding_max_abs_bps: Number(btcCfg?.funding_max_abs_bps ?? (paperHighRisk ? 10 : testnet ? 10 : 8)),

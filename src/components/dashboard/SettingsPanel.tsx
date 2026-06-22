@@ -19,9 +19,9 @@ function LeverageControl({
   const [lev, setLev] = useState(value);
   useEffect(() => setLev(value), [value]);
 
-  // Mirrors the server-side math: stop fires at ~ -1% price move (-lev% ROI),
-  // and isolated-margin liquidation is near a -3.8% move (~-96% ROI).
-  const stopMovePct = 1.0;
+  // Mirrors the server-side math: stop fires at ~ -1.8% price move (-1.8×lev%
+  // ROI), and isolated-margin liquidation is near a -96% ROI move.
+  const stopMovePct = 1.8;
   const liqMovePct = 96 / lev;
   const buffer = (liqMovePct / stopMovePct).toFixed(1);
   const risky = lev >= 20;
@@ -51,7 +51,7 @@ function LeverageControl({
       </div>
       <p className="text-xs text-muted-foreground">
         Applies to both LIVE and TESTNET. Stop-loss auto-scales to ~-{stopMovePct}% price
-        move (-{lev}% ROI); liquidation is near a -{liqMovePct.toFixed(1)}% move — a{" "}
+        move (-{(stopMovePct * lev).toFixed(0)}% ROI); liquidation is near a -{liqMovePct.toFixed(1)}% move — a{" "}
         <span className={risky ? "text-destructive font-medium" : "font-medium"}>{buffer}x</span>{" "}
         safety buffer. Higher leverage = bigger positions and bigger swings.
       </p>
