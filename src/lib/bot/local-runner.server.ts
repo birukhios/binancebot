@@ -177,28 +177,28 @@ export async function runLocalBotTick(userId: string) {
     Math.floor(Number(state.cfg.consecutive_loss_pause_count ?? 3)),
   );
   const liveMinOrderUsdt = 5;
-  const minOrderFloor = testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt;
-  const liveSmallAccount = !testnet && effectiveCapital < 50;
+  const smallAccount = effectiveCapital < 50;
+  const minOrderFloor = smallAccount ? liveMinOrderUsdt : testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt;
   const btcOrderSize = paperHighRisk
     ? Math.max(BTC_MIN_ORDER_USDT, effectiveCapital / 2)
-    : liveSmallAccount
+    : smallAccount
       ? Math.max(liveMinOrderUsdt, effectiveCapital)
       : Math.max(minOrderFloor, effectiveCapital / maxOpenTrades);
   const btcCfg = state.symbols.find((s) => s.symbol === BTC_SYMBOL);
   updateLocalSymbol(userId, BTC_SYMBOL, {
     enabled: true,
-    grid_levels: liveSmallAccount ? 1 : paperHighRisk ? 3 : testnet ? BTC_GRID_LEVELS : 1,
-    single_grid_order: liveSmallAccount ? true : !paperHighRisk && !testnet,
+    grid_levels: smallAccount ? 1 : paperHighRisk ? 3 : testnet ? BTC_GRID_LEVELS : 1,
+    single_grid_order: smallAccount ? true : !paperHighRisk && !testnet,
     order_size_usdt: btcOrderSize,
-    min_order_size_usdt: liveSmallAccount ? liveMinOrderUsdt : minOrderFloor,
-    max_order_size_usdt: Math.max(liveSmallAccount ? liveMinOrderUsdt : minOrderFloor, btcOrderSize * 2),
-    grid_spacing_pct: liveSmallAccount ? 0.15 : paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5,
-    leverage: liveSmallAccount ? 10 : paperHighRisk ? 8 : testnet ? BTC_LEVERAGE : 2,
-    stop_loss_roi_pct: Number(btcCfg?.stop_loss_roi_pct ?? (liveSmallAccount ? -5 : paperHighRisk ? -6 : testnet ? -8 : -6)),
-    trend_filter_enabled: liveSmallAccount ? false : Boolean(btcCfg?.trend_filter_enabled ?? true),
-    funding_filter_enabled: liveSmallAccount ? false : Boolean(btcCfg?.funding_filter_enabled ?? true),
+    min_order_size_usdt: smallAccount ? liveMinOrderUsdt : minOrderFloor,
+    max_order_size_usdt: Math.max(smallAccount ? liveMinOrderUsdt : minOrderFloor, btcOrderSize * 2),
+    grid_spacing_pct: smallAccount ? 0.15 : paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5,
+    leverage: smallAccount ? 10 : paperHighRisk ? 8 : testnet ? BTC_LEVERAGE : 2,
+    stop_loss_roi_pct: Number(btcCfg?.stop_loss_roi_pct ?? (smallAccount ? -5 : paperHighRisk ? -6 : testnet ? -8 : -6)),
+    trend_filter_enabled: smallAccount ? false : Boolean(btcCfg?.trend_filter_enabled ?? true),
+    funding_filter_enabled: smallAccount ? false : Boolean(btcCfg?.funding_filter_enabled ?? true),
     funding_max_abs_bps: Number(btcCfg?.funding_max_abs_bps ?? (paperHighRisk ? 10 : testnet ? 10 : 8)),
-    z_filter_enabled: liveSmallAccount ? false : Boolean(btcCfg?.z_filter_enabled ?? !testnet),
+    z_filter_enabled: smallAccount ? false : Boolean(btcCfg?.z_filter_enabled ?? !testnet),
     z_entry_threshold: Number(btcCfg?.z_entry_threshold ?? (paperHighRisk ? 1.25 : testnet ? 1.0 : 1.4)),
   });
 
