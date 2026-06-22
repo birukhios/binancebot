@@ -1,24 +1,67 @@
-const VAPID_PUBLIC_KEY = ""; // Generated server-side, set via env
-
 export async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return null;
   try {
-    const reg = await navigator.serviceWorker.register("/sw.js");
-    return reg;
+    return await navigator.serviceWorker.register("/sw.js");
   } catch {
     return null;
   }
 }
 
-export async function subscribeToPush(registration: ServiceWorkerRegistration) {
+export function isIos() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  // iPadOS 13+ reports as Mac; detect via touch points.
+  return /iphone|ipad|ipod/i.test(ua) || (ua.includes("Macintosh") && "ontouchend" in document);
+}
+
+export function isStandalone() {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    (window.navigator as any).standalone === true
+  );
+}
+
+/**
+ * On iOS, web push only works when the PWA has been installed to the home
+ * screen (standalone) on iOS 16.4+. In a Safari tab, PushManager is undefined.
+ * Returns whether enabling notifications is possible right now.
+ */
+export function canEnableNotifications() {
+  if (typeof window === "undefined") return false;
+  if (!("serviceWorker" in navigator) || !("Notification" in window)) return false;
+  if (isIos() && !isStandalone()) return false; // must install to home screen first
+  return "PushManager" in window;
+}
+
+/**
+ * Subscribe to push. MUST be called from a user gesture (tap) — iOS rejects
+ * Notification.requestPermission() that isn't triggered by direct interaction.
+ */
+export async function subscribeToPush(): Promise<{ ok: boolean; reason?: string }> {
+  if (isIos() && !isStandalone()) {
+    return { ok: false, reason: "ios-not-installed" };
+  }
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return { ok: false, reason: "unsupported" };
+  }
+
+  const registration =
+    (await navigator.serviceWorker.getRegistration()) ?? (await registerServiceWorker());
+  if (!registration) return { ok: false, reason: "no-sw" };
+  await navigator.serviceWorker.ready;
+
   const existing = await registration.pushManager.getSubscription();
-  if (existing) return existing;
+  if (existing) {
+    await saveSubscription(existing);
+    return { ok: true };
+  }
 
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") return null;
+  if (permission !== "granted") return { ok: false, reason: "denied" };
 
   const vapidKey = await fetchVapidKey();
-  if (!vapidKey) return null;
+  if (!vapidKey) return { ok: false, reason: "no-key" };
 
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
@@ -26,7 +69,7 @@ export async function subscribeToPush(registration: ServiceWorkerRegistration) {
   });
 
   await saveSubscription(subscription);
-  return subscription;
+  return { ok: true };
 }
 
 async function fetchVapidKey(): Promise<string | null> {

@@ -1,5 +1,5 @@
-const CACHE_NAME = "bkbot-v1";
-const PRECACHE = ["/", "/icon-192.svg", "/icon-512.svg"];
+const CACHE_NAME = "bkbot-v2";
+const PRECACHE = ["/", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/manifest.json"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
@@ -31,8 +31,8 @@ self.addEventListener("push", (e) => {
   const title = data.title || "BKbot";
   const options = {
     body: data.body || "Trading alert",
-    icon: "/icon-192.svg",
-    badge: "/icon-192.svg",
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
     tag: data.tag || "bkbot-alert",
     data: { url: data.url || "/" },
     vibrate: [200, 100, 200],

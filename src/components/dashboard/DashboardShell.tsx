@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
-import { registerServiceWorker, subscribeToPush, isPushSupported } from "@/lib/push-notifications";
+import { registerServiceWorker, subscribeToPush, getNotificationPermission } from "@/lib/push-notifications";
+import { NotificationPrompt } from "@/components/NotificationPrompt";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,10 +66,13 @@ export function DashboardShell() {
   }, [theme]);
 
   useEffect(() => {
-    if (!isPushSupported()) return;
-    registerServiceWorker().then((reg) => {
-      if (reg) subscribeToPush(reg).catch(() => {});
-    });
+    // Always register the service worker (PWA caching + push delivery).
+    registerServiceWorker();
+    // Only auto-resubscribe if the user already granted permission before.
+    // Never auto-prompt — iOS requires a user gesture (handled by NotificationPrompt).
+    if (getNotificationPermission() === "granted") {
+      subscribeToPush().catch(() => {});
+    }
   }, []);
 
   const session = useQuery({
@@ -279,6 +283,7 @@ export function DashboardShell() {
           </div>
         </main>
       </SidebarInset>
+      <NotificationPrompt />
     </SidebarProvider>
   );
 }
