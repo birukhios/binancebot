@@ -189,7 +189,7 @@ export function DashboardShell() {
           }}
         />
 
-        <main className="flex-1 p-4 md:p-6">
+        <main className="flex-1 p-2 sm:p-4 md:p-6">
           <div className="mx-auto max-w-7xl">
             {!credsReady && (
               <div className="mb-4 rounded-md border border-orange-500/60 bg-orange-500/10 p-3 text-sm">

@@ -121,20 +121,15 @@ export async function runLocalBotTick(userId: string) {
     if (nextPeak > 0) {
       const drawdownPct = ((nextPeak - totalEquity) / nextPeak) * 100;
       if (drawdownPct >= drawdownLimit) {
-        const positionsToClose = await binance.positionRisk(creds).catch(() => [] as any[]);
-        for (const p of positionsToClose) {
-          if (Number(p.positionAmt) === 0) continue;
-          try {
-            await closePositionAndCancel(userId, creds, String(p.symbol));
-          } catch {
-            // Best-effort flattening on kill switch.
-          }
-        }
-        lockPaperProfile(
+        updateLocalBotConfig(userId, {
+          entry_pause_until_iso: nextBotDayStartIso(),
+          entry_pause_reason: `drawdown gate: equity ${totalEquity.toFixed(2)} USDT, peak ${nextPeak.toFixed(2)} USDT, drawdown ${drawdownPct.toFixed(2)}%`,
+        });
+        addLocalLog(
           userId,
-          `max drawdown reached: equity ${totalEquity.toFixed(2)} USDT, peak ${nextPeak.toFixed(2)} USDT, drawdown ${drawdownPct.toFixed(2)}%`,
+          "warn",
+          `Drawdown gate hit: ${drawdownPct.toFixed(2)}% >= ${drawdownLimit}%. New entries paused until next bot day; exits keep running.`,
         );
-        return { ok: false, error: "paper drawdown kill switch", processed: 0, errors: 0 };
       }
     }
   }
@@ -233,32 +228,6 @@ export async function runLocalBotTick(userId: string) {
   }
 
   if (dailyLossLimit > 0 && pnl.total <= -dailyLossLimit) {
-    if (paperHighRisk) {
-      updateLocalBotConfig(userId, { is_running: false });
-      addLocalLog(
-        userId,
-        "error",
-        `Daily loss stop hit: PnL ${pnl.total.toFixed(2)} <= -${dailyLossLimit.toFixed(2)} USDT (${Number(state.cfg.daily_loss_limit_pct ?? 1)}% of bot capital). Stopping bot and closing open positions.`,
-      );
-      for (const p of activeOpenPositions) {
-        try {
-          await closePositionAndCancel(userId, creds, String(p.symbol));
-        } catch (error) {
-          addLocalLog(
-            userId,
-            "error",
-            `Daily-loss close failed: ${(error as Error).message}`,
-            String(p.symbol),
-          );
-        }
-      }
-      lockPaperProfile(
-        userId,
-        `daily loss stop: PnL ${pnl.total.toFixed(2)} USDT, limit -${dailyLossLimit.toFixed(2)} USDT`,
-      );
-      return { ok: false, error: "daily loss stop", processed: 0, errors: 0 };
-    }
-
     updateLocalBotConfig(userId, {
       entry_pause_until_iso: nextBotDayStartIso(),
       entry_pause_reason: `daily loss stop: PnL ${pnl.total.toFixed(2)} USDT, limit -${dailyLossLimit.toFixed(2)} USDT`,
@@ -268,26 +237,11 @@ export async function runLocalBotTick(userId: string) {
       "warn",
       `Daily loss gate hit: PnL ${pnl.total.toFixed(2)} <= -${dailyLossLimit.toFixed(2)} USDT. New entries paused until the next bot day (${nextBotDayStartIso()} UTC); exits will keep running.`,
       BTC_SYMBOL,
-      { dedupeKey: "live-daily-loss-pause", dedupeWindowMs: 60 * 60 * 1000 },
+      { dedupeKey: "daily-loss-pause", dedupeWindowMs: 60 * 60 * 1000 },
     );
-    return { ok: true, paused: "daily loss gate", processed: 0, errors: 0 };
   }
 
   if (pnl.total < 0 && pnl.consecutiveLosses >= lossPauseCount) {
-    if (paperHighRisk) {
-      updateLocalBotConfig(userId, { is_running: false });
-      addLocalLog(
-        userId,
-        "error",
-        `Loss-streak pause: ${pnl.consecutiveLosses} realized losses of at least ${LOSS_STREAK_MIN_LOSS_USDT.toFixed(2)} USDT in a row while daily PnL is ${pnl.total.toFixed(2)}. Bot stopped before opening more trades.`,
-      );
-      lockPaperProfile(
-        userId,
-        `loss streak pause: ${pnl.consecutiveLosses} losses in a row while daily PnL is ${pnl.total.toFixed(2)} USDT`,
-      );
-      return { ok: false, error: "loss streak pause", processed: 0, errors: 0 };
-    }
-
     updateLocalBotConfig(userId, {
       entry_pause_until_iso: nextBotDayStartIso(),
       entry_pause_reason: `loss streak pause: ${pnl.consecutiveLosses} losses in a row while daily PnL is ${pnl.total.toFixed(2)} USDT`,
@@ -297,9 +251,8 @@ export async function runLocalBotTick(userId: string) {
       "warn",
       `Loss streak gate hit: ${pnl.consecutiveLosses} realized losses in a row today. New entries paused until the next bot day (${nextBotDayStartIso()} UTC); exits will keep running.`,
       BTC_SYMBOL,
-      { dedupeKey: "live-loss-streak-pause", dedupeWindowMs: 60 * 60 * 1000 },
+      { dedupeKey: "loss-streak-pause", dedupeWindowMs: 60 * 60 * 1000 },
     );
-    return { ok: true, paused: "loss streak gate", processed: 0, errors: 0 };
   }
 
   const entriesBlocked =
@@ -425,18 +378,6 @@ export function ensureLocalBotRunner(userId: string) {
         }
       })
       .catch((error) => {
-        if (isPaperHighRisk(userId)) {
-          const state = getLocalBotState(userId);
-          const failures = Number(state.cfg.paper_api_failure_count ?? 0) + 1;
-          updateLocalBotConfig(userId, { paper_api_failure_count: failures });
-          if (failures >= 3) {
-            lockPaperProfile(
-              userId,
-              `API/data failures repeated ${failures} times in a row: ${(error as Error).message}`,
-            );
-            return;
-          }
-        }
         addLocalLog(userId, "error", `Local runner tick failed: ${(error as Error).message}`);
       })
       .finally(() => {

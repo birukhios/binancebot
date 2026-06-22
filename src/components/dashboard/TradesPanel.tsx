@@ -39,11 +39,11 @@ export function TradesPanel({
   return (
     <Card>
       <CardContent className="space-y-4 pt-5">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
+        <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+          <div className="w-full space-y-1 sm:w-auto">
             <Label className="text-xs">Symbol</Label>
             <Select value={symbol} onValueChange={setSymbol}>
-              <SelectTrigger className="w-40"><SelectValue placeholder="All" /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="All" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All symbols</SelectItem>
                 {symbols.map((s: any) => (
@@ -52,10 +52,10 @@ export function TradesPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1">
+          <div className="flex-1 space-y-1 sm:flex-none">
             <Label className="text-xs">Side</Label>
             <Select value={side} onValueChange={(v) => setSide(v as TradeSide)}>
-              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-32"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="BUY">BUY</SelectItem>
@@ -63,10 +63,10 @@ export function TradesPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1">
+          <div className="flex-1 space-y-1 sm:flex-none">
             <Label className="text-xs">Per page</Label>
             <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-              <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-24"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {[10, 20, 50, 100].map((n) => (
                   <SelectItem key={n} value={String(n)}>{n}</SelectItem>
@@ -80,7 +80,40 @@ export function TradesPanel({
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile card layout */}
+        <div className="space-y-2 md:hidden">
+          {rows.map((t: any) => {
+            const gross = Number(t.realized_pnl ?? 0);
+            const commission = Number(t.commission ?? 0);
+            const net = gross - commission;
+            return (
+              <Card key={t.id}>
+                <CardContent className="p-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="font-mono text-xs">{t.symbol}</span>
+                    <Badge variant={t.side === "BUY" ? "default" : "secondary"} className="text-[10px]">{t.side}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+                    <div className="text-muted-foreground">Time</div>
+                    <div className="text-right">{new Date(t.filled_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+                    <div className="text-muted-foreground">Price / Qty</div>
+                    <div className="text-right">{num(t.price)} / {num(t.qty)}</div>
+                    <div className="text-muted-foreground">Gross</div>
+                    <div className={`text-right ${gross >= 0 ? "text-green-600" : "text-destructive"}`}>{num(gross)}</div>
+                    <div className="text-muted-foreground">Net</div>
+                    <div className={`text-right ${net >= 0 ? "text-green-600" : "text-destructive"}`}>{num(net)}</div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+          {rows.length === 0 && (
+            <p className="py-4 text-center text-sm text-muted-foreground">No trades match the current filters</p>
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -101,30 +134,22 @@ export function TradesPanel({
                 const net = gross - commission;
                 return (
                   <TableRow key={t.id}>
-                    <TableCell className="font-mono text-xs">
-                      {new Date(t.filled_at).toLocaleString()}
-                    </TableCell>
+                    <TableCell className="font-mono text-xs">{new Date(t.filled_at).toLocaleString()}</TableCell>
                     <TableCell className="font-mono">{t.symbol}</TableCell>
                     <TableCell>
                       <Badge variant={t.side === "BUY" ? "default" : "secondary"}>{t.side}</Badge>
                     </TableCell>
                     <TableCell>{num(t.price)}</TableCell>
                     <TableCell>{num(t.qty)}</TableCell>
-                    <TableCell className={gross >= 0 ? "text-green-600" : "text-destructive"}>
-                      {num(gross)}
-                    </TableCell>
+                    <TableCell className={gross >= 0 ? "text-green-600" : "text-destructive"}>{num(gross)}</TableCell>
                     <TableCell className="text-muted-foreground">{num(commission)}</TableCell>
-                    <TableCell className={net >= 0 ? "text-green-600" : "text-destructive"}>
-                      {num(net)}
-                    </TableCell>
+                    <TableCell className={net >= 0 ? "text-green-600" : "text-destructive"}>{num(net)}</TableCell>
                   </TableRow>
                 );
               })}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
-                    No trades match the current filters
-                  </TableCell>
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">No trades match the current filters</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -136,16 +161,8 @@ export function TradesPanel({
             Page {meta?.page ?? 1} of {meta?.totalPages ?? 1}
           </p>
           <div className="flex gap-2">
-            <Button
-              variant="outline" size="sm"
-              disabled={(meta?.page ?? 1) <= 1 || trades.isFetching}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >Prev</Button>
-            <Button
-              variant="outline" size="sm"
-              disabled={(meta?.page ?? 1) >= (meta?.totalPages ?? 1) || trades.isFetching}
-              onClick={() => setPage((p) => Math.min(meta?.totalPages ?? 1, p + 1))}
-            >Next</Button>
+            <Button variant="outline" size="sm" disabled={(meta?.page ?? 1) <= 1 || trades.isFetching} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</Button>
+            <Button variant="outline" size="sm" disabled={(meta?.page ?? 1) >= (meta?.totalPages ?? 1) || trades.isFetching} onClick={() => setPage((p) => Math.min(meta?.totalPages ?? 1, p + 1))}>Next</Button>
           </div>
         </div>
       </CardContent>

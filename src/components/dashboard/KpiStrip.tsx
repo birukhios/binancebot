@@ -15,12 +15,13 @@ function num(v: string | number) {
 
 export { num };
 
-function Stat({ label, value, className }: { label: string; value: string; className?: string }) {
+function Stat({ label, value, sub, className }: { label: string; value: string; sub?: string; className?: string }) {
   return (
     <Card className={className}>
-      <CardContent className="pt-5 pb-4">
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-        <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+      <CardContent className="p-3 sm:pt-5 sm:pb-4">
+        <p className="text-[10px] uppercase tracking-wide text-muted-foreground sm:text-xs">{label}</p>
+        <p className="mt-0.5 text-sm font-semibold tabular-nums sm:mt-1 sm:text-lg">{value}</p>
+        {sub && <p className="text-[10px] text-muted-foreground sm:text-xs">{sub}</p>}
       </CardContent>
     </Card>
   );
@@ -53,6 +54,12 @@ function toDateInputValue(ms: number) {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+function pnlColor(v: number) {
+  if (v > 0) return "text-green-500";
+  if (v < 0) return "text-red-500";
+  return "";
+}
+
 function RealizedPnlCard({ realizedToday }: { realizedToday: number }) {
   const [expanded, setExpanded] = useState(false);
   const [preset, setPreset] = useState<DatePreset>("today");
@@ -76,94 +83,119 @@ function RealizedPnlCard({ realizedToday }: { realizedToday: number }) {
     staleTime: 30_000,
   });
 
-  const displayValue = isToday
-    ? realizedToday
-    : history.data?.total ?? null;
+  const displayValue = isToday ? realizedToday : history.data?.total ?? null;
+
+  const breakdown = history.data?.breakdown ?? [];
+  const wins = breakdown.filter((r: any) => r.type === "REALIZED_PNL" && r.amount > 0);
+  const losses = breakdown.filter((r: any) => r.type === "REALIZED_PNL" && r.amount < 0);
+  const totalFees = breakdown.filter((r: any) => r.type === "COMMISSION").reduce((s: number, r: any) => s + r.amount, 0);
+  const totalFunding = breakdown.filter((r: any) => r.type === "FUNDING_FEE").reduce((s: number, r: any) => s + r.amount, 0);
 
   const presets: { id: DatePreset; label: string }[] = [
     { id: "today", label: "Today" },
-    { id: "yesterday", label: "Yesterday" },
+    { id: "yesterday", label: "Yday" },
     { id: "7d", label: "7D" },
     { id: "30d", label: "30D" },
     { id: "custom", label: "Custom" },
   ];
 
+  const presetLabel = preset === "today" ? "today" : preset === "yesterday" ? "yesterday" : preset === "custom" ? "custom" : preset;
+
   return (
-    <Card>
-      <CardContent className="pt-5 pb-4">
+    <Card className="col-span-2 sm:col-span-1">
+      <CardContent className="p-3 sm:pt-5 sm:pb-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Realized {preset === "today" ? "today" : preset === "custom" ? "custom" : preset}
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground sm:text-xs">
+            Realized {presetLabel}
           </p>
           <Button
             variant="ghost"
             size="sm"
-            className="h-5 px-1.5 text-xs"
+            className="h-5 px-1.5 text-[10px] sm:text-xs"
             onClick={() => setExpanded(!expanded)}
           >
-            {expanded ? "×" : "Filter"}
+            {expanded ? "Close" : "Filter"}
           </Button>
         </div>
-        <p className={`mt-1 text-lg font-semibold tabular-nums ${displayValue !== null && displayValue < 0 ? "text-red-500" : displayValue !== null && displayValue > 0 ? "text-green-500" : ""}`}>
+        <p className={`mt-0.5 text-sm font-semibold tabular-nums sm:mt-1 sm:text-lg ${displayValue !== null ? pnlColor(displayValue) : ""}`}>
           {displayValue !== null ? `${displayValue.toFixed(4)} USDT` : history.isFetching ? "Loading..." : "—"}
         </p>
 
         {expanded && (
-          <div className="mt-3 space-y-2">
+          <div className="mt-2 space-y-2">
             <div className="flex flex-wrap gap-1">
               {presets.map((p) => (
                 <Button
                   key={p.id}
                   variant={preset === p.id ? "default" : "outline"}
                   size="sm"
-                  className="h-6 px-2 text-xs"
+                  className="h-6 px-2 text-[10px] sm:text-xs"
                   onClick={() => setPreset(p.id)}
                 >
                   {p.label}
                 </Button>
               ))}
             </div>
+
             {preset === "custom" && (
-              <div className="flex gap-2">
-                <Input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="h-7 text-xs"
-                />
-                <Input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="h-7 text-xs"
-                />
+              <div className="flex gap-1.5">
+                <Input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-7 text-xs" />
+                <Input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-7 text-xs" />
               </div>
             )}
-            {!isToday && history.data?.breakdown && history.data.breakdown.length > 0 && (
-              <div className="max-h-32 overflow-y-auto rounded border text-xs">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-2 py-1 text-left font-medium">Time</th>
-                      <th className="px-2 py-1 text-left font-medium">Type</th>
-                      <th className="px-2 py-1 text-right font-medium">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.data.breakdown.slice(0, 50).map((r: any, i: number) => (
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="px-2 py-0.5 text-muted-foreground">
-                          {new Date(r.time).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                        </td>
-                        <td className="px-2 py-0.5">{r.type.replace(/_/g, " ")}</td>
-                        <td className={`px-2 py-0.5 text-right tabular-nums ${r.amount < 0 ? "text-red-500" : "text-green-500"}`}>
-                          {r.amount.toFixed(4)}
-                        </td>
+
+            {!isToday && breakdown.length > 0 && (
+              <>
+                {/* Summary stats */}
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 rounded border bg-muted/30 p-2 text-xs">
+                  <span className="text-muted-foreground">Wins / Losses</span>
+                  <span className="text-right">
+                    <span className="text-green-500">{wins.length}</span>
+                    {" / "}
+                    <span className="text-red-500">{losses.length}</span>
+                  </span>
+                  <span className="text-muted-foreground">Win total</span>
+                  <span className="text-right text-green-500">
+                    +{wins.reduce((s: number, r: any) => s + r.amount, 0).toFixed(4)}
+                  </span>
+                  <span className="text-muted-foreground">Loss total</span>
+                  <span className="text-right text-red-500">
+                    {losses.reduce((s: number, r: any) => s + r.amount, 0).toFixed(4)}
+                  </span>
+                  <span className="text-muted-foreground">Commissions</span>
+                  <span className={`text-right ${pnlColor(totalFees)}`}>{totalFees.toFixed(4)}</span>
+                  <span className="text-muted-foreground">Funding</span>
+                  <span className={`text-right ${pnlColor(totalFunding)}`}>{totalFunding.toFixed(4)}</span>
+                </div>
+
+                {/* Detail table */}
+                <div className="max-h-40 overflow-y-auto rounded border text-xs">
+                  <table className="w-full">
+                    <thead className="sticky top-0">
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-2 py-1 text-left font-medium">Time</th>
+                        <th className="px-2 py-1 text-left font-medium">Type</th>
+                        <th className="px-2 py-1 text-right font-medium">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {breakdown.slice(0, 100).map((r: any, i: number) => (
+                        <tr key={i} className="border-b last:border-0">
+                          <td className="px-2 py-0.5 text-muted-foreground">
+                            {new Date(r.time).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </td>
+                          <td className="px-2 py-0.5">
+                            {r.type === "REALIZED_PNL" ? "PnL" : r.type === "COMMISSION" ? "Fee" : "Fund"}
+                          </td>
+                          <td className={`px-2 py-0.5 text-right tabular-nums ${pnlColor(r.amount)}`}>
+                            {r.amount >= 0 ? "+" : ""}{r.amount.toFixed(4)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -186,7 +218,7 @@ export function KpiStrip({
   estFees: number;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
       <Stat
         label="Wallet balance"
         value={account?.totalWalletBalance ? `${num(account.totalWalletBalance)} USDT` : "—"}
