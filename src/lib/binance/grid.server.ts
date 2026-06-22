@@ -1295,7 +1295,23 @@ async function reconcileSymbolLocked(
       configuredMaxOrder,
       Math.max(minEntryNotional, remainingBudget / entryDesired.length),
     );
-    const sizedQty = roundStep(perEntryBudget / mark, f.stepSize, f.quantityPrecision);
+    let sizedQty = roundStep(perEntryBudget / mark, f.stepSize, f.quantityPrecision);
+    // Flooring can drop the qty below the exchange minimum (e.g. a $60 budget at
+    // $64k BTC floors to 0 because one min lot is 0.001 = ~$64). When that
+    // happens, round UP to the smallest valid lot as long as it only modestly
+    // overshoots the remaining budget (≤25%) and stays within the configured
+    // max order — so a small wallet can still open one position.
+    const minValidQty = roundStepUp(
+      Math.max(f.minQty, f.minNotional / mark, minEntryNotional / mark),
+      f.stepSize,
+      f.quantityPrecision,
+    );
+    if (sizedQty < minValidQty) {
+      const minValidNotional = minValidQty * mark;
+      if (minValidNotional <= remainingBudget * 1.25 && minValidNotional <= configuredMaxOrder * 1.25) {
+        sizedQty = minValidQty;
+      }
+    }
     const sizedNotional = sizedQty * mark;
 
     if (sizedQty < f.minQty || sizedNotional < minEntryNotional || sizedNotional < f.minNotional) {
