@@ -10,7 +10,7 @@ import {
   updateLocalSymbol,
 } from "@/lib/bot/local-bot-store.server";
 
-const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 15_000);
+const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 10_000);
 const BTC_SYMBOL = "BTCUSDT";
 const BTC_MAX_ENTRY_SLOTS = 4;
 const BTC_GRID_LEVELS = 2;
@@ -117,18 +117,16 @@ export async function runLocalBotTick(userId: string) {
       paper_peak_equity_usdt: nextPeak,
       paper_api_failure_count: 0,
     });
-    const drawdownLimit = Math.max(0.1, Number(state.cfg.drawdown_pause_pct ?? 2));
+    const drawdownLimit = Math.max(0.1, Number(state.cfg.drawdown_pause_pct ?? 5));
     if (nextPeak > 0) {
       const drawdownPct = ((nextPeak - totalEquity) / nextPeak) * 100;
       if (drawdownPct >= drawdownLimit) {
-        updateLocalBotConfig(userId, {
-          entry_pause_until_iso: nextBotDayStartIso(),
-          entry_pause_reason: `drawdown gate: equity ${totalEquity.toFixed(2)} USDT, peak ${nextPeak.toFixed(2)} USDT, drawdown ${drawdownPct.toFixed(2)}%`,
-        });
         addLocalLog(
           userId,
           "warn",
-          `Drawdown gate hit: ${drawdownPct.toFixed(2)}% >= ${drawdownLimit}%. New entries paused until next bot day; exits keep running.`,
+          `Drawdown warning: ${drawdownPct.toFixed(2)}% >= ${drawdownLimit}%. Bot continues trading.`,
+          undefined,
+          { dedupeKey: "drawdown-warn", dedupeWindowMs: 60 * 60 * 1000 },
         );
       }
     }
@@ -228,38 +226,29 @@ export async function runLocalBotTick(userId: string) {
   }
 
   if (dailyLossLimit > 0 && pnl.total <= -dailyLossLimit) {
-    updateLocalBotConfig(userId, {
-      entry_pause_until_iso: nextBotDayStartIso(),
-      entry_pause_reason: `daily loss stop: PnL ${pnl.total.toFixed(2)} USDT, limit -${dailyLossLimit.toFixed(2)} USDT`,
-    });
     addLocalLog(
       userId,
       "warn",
-      `Daily loss gate hit: PnL ${pnl.total.toFixed(2)} <= -${dailyLossLimit.toFixed(2)} USDT. New entries paused until the next bot day (${nextBotDayStartIso()} UTC); exits will keep running.`,
+      `Daily loss warning: PnL ${pnl.total.toFixed(2)} <= -${dailyLossLimit.toFixed(2)} USDT. Bot continues trading.`,
       BTC_SYMBOL,
-      { dedupeKey: "daily-loss-pause", dedupeWindowMs: 60 * 60 * 1000 },
+      { dedupeKey: "daily-loss-warn", dedupeWindowMs: 60 * 60 * 1000 },
     );
   }
 
   if (pnl.total < 0 && pnl.consecutiveLosses >= lossPauseCount) {
-    updateLocalBotConfig(userId, {
-      entry_pause_until_iso: nextBotDayStartIso(),
-      entry_pause_reason: `loss streak pause: ${pnl.consecutiveLosses} losses in a row while daily PnL is ${pnl.total.toFixed(2)} USDT`,
-    });
     addLocalLog(
       userId,
       "warn",
-      `Loss streak gate hit: ${pnl.consecutiveLosses} realized losses in a row today. New entries paused until the next bot day (${nextBotDayStartIso()} UTC); exits will keep running.`,
+      `Loss streak warning: ${pnl.consecutiveLosses} losses in a row, daily PnL ${pnl.total.toFixed(2)} USDT. Bot continues trading.`,
       BTC_SYMBOL,
-      { dedupeKey: "loss-streak-pause", dedupeWindowMs: 60 * 60 * 1000 },
+      { dedupeKey: "loss-streak-warn", dedupeWindowMs: 60 * 60 * 1000 },
     );
   }
 
   const entriesBlocked =
     activeOpenPositions.length >= maxOpenTrades ||
     effectiveCapital <= 0 ||
-    (!testnet && effectiveCapital < liveMinOrderUsdt) ||
-    entryPauseActive;
+    (!testnet && effectiveCapital < liveMinOrderUsdt);
 
   for (const symbol of openPositionSymbols) {
     if (!state.symbols.some((s) => s.symbol === symbol)) {
