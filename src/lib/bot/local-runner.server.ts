@@ -162,10 +162,17 @@ export async function runLocalBotTick(userId: string) {
   const smallWallet = effectiveCapital < 50;
   // Leverage the bot trades at (configurable, capped at 25× by normalize).
   const targetLeverage = Math.max(1, Math.min(25, Math.floor(Number(state.cfg.target_leverage ?? 25))));
+  // BTCUSDT exchange minimum notional (~$5 base, but the grid enforces a ~$55
+  // floor per order including the minNotional buffer).
+  const EXCHANGE_MIN_NOTIONAL = 55;
   // Small wallets get a leveraged notional budget so the higher leverage
-  // actually deploys a bigger position. Cap margin utilisation at ~50% so a
-  // fully-deployed grid still sits far inside the liquidation threshold.
-  const leveragedCapital = smallWallet ? effectiveCapital * targetLeverage * 0.5 : effectiveCapital;
+  // actually deploys a bigger position. Target ~60% of margin capacity, but
+  // always allow at least one minimum order when the wallet can margin it, and
+  // never exceed 90% utilisation so the position stays liquidation-safe.
+  const marginCapacity = effectiveCapital * targetLeverage;
+  const leveragedCapital = smallWallet
+    ? Math.min(marginCapacity * 0.9, Math.max(marginCapacity * 0.6, EXCHANGE_MIN_NOTIONAL * 1.05))
+    : effectiveCapital;
   updateLocalBotConfig(userId, { max_total_notional_usdt: leveragedCapital });
   const paperHighRisk = state.cfg.risk_profile === PAPER_HIGH_RISK_PROFILE;
   if (paperHighRisk) {
@@ -280,9 +287,11 @@ export async function runLocalBotTick(userId: string) {
     z_entry_threshold: Number(btcCfg?.z_entry_threshold ?? (paperHighRisk ? 1.25 : testnet ? 1.0 : 1.4)),
   });
 
-  const pauseUntilMs = entryPauseUntilMs(state.cfg.entry_pause_until_iso);
-  const entryPauseActive = pauseUntilMs > Date.now();
-  if (!entryPauseActive && state.cfg.entry_pause_until_iso) {
+  // The bot never pauses itself. Clear any stale pause unconditionally so a
+  // leftover future-dated value can never block entries or show a "Paused"
+  // badge in the UI.
+  const entryPauseActive = false;
+  if (state.cfg.entry_pause_until_iso || state.cfg.entry_pause_reason) {
     updateLocalBotConfig(userId, {
       entry_pause_until_iso: null,
       entry_pause_reason: null,

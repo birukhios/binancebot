@@ -47,7 +47,7 @@ export function DashboardHeader({
       <Separator orientation="vertical" className="hidden h-6 sm:block" />
 
       <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-        <h1 className="text-sm font-semibold">Grid Bot</h1>
+        <h1 className="text-sm font-semibold">BKbot</h1>
         <Badge variant={isTestnet ? "secondary" : "destructive"} className="text-[10px] sm:text-xs">
           {isTestnet ? "TESTNET" : "LIVE"}
         </Badge>
@@ -57,11 +57,7 @@ export function DashboardHeader({
         >
           {isRunning ? "RUNNING" : "STOPPED"}
         </Badge>
-        {entryPauseActive && (
-          <Badge variant="outline" className="text-[10px] text-amber-600 sm:text-xs">
-            Paused until {new Date(entryPauseUntil).toLocaleTimeString()}
-          </Badge>
-        )}
+        {/* Bot never pauses itself — no paused badge. */}
         {marketSession && (
           <span className="hidden text-xs text-muted-foreground lg:inline">
             {marketSession.name.replace(/_/g, " ")}

@@ -138,8 +138,16 @@ export async function maybeAutoLearn(
   else if (winRate < 0.45 || netPnl < 0) spacingTarget = 1.35;
 
   let tpTarget = TP_BASE;
-  if (winRate >= 0.62) tpTarget = 0.28; // winners frequent → let them run
-  else if (winRate < 0.45) tpTarget = 0.15; // winners rare → bank quicker
+  if (winRate < 0.45) {
+    tpTarget = 0.15; // winners rare → bank quicker
+  } else if (profitFactor < 1.0) {
+    // High win rate but losing overall means the take-profit banks tiny gains
+    // while each stop loses far more. Let winners run much further so average
+    // win size catches up to average loss size.
+    tpTarget = 0.36;
+  } else if (winRate >= 0.62) {
+    tpTarget = 0.28; // winners frequent and profitable → let them run a bit
+  }
 
   let stopTarget = 1.0;
   if (profitFactor < 1.0 || lossStreak >= 3) stopTarget = 0.8; // cut losers faster

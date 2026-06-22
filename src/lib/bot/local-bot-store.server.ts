@@ -173,8 +173,9 @@ function normalizeUserStore(user: LocalUserStore) {
   user.cfg.drawdown_pause_pct = paperHighRisk
     ? 5
     : Math.max(0.1, Number(user.cfg.drawdown_pause_pct ?? 5));
-  user.cfg.entry_pause_until_iso = user.cfg.entry_pause_until_iso ?? null;
-  user.cfg.entry_pause_reason = user.cfg.entry_pause_reason ?? null;
+  // The bot never pauses itself — always clear any stale pause state.
+  user.cfg.entry_pause_until_iso = null;
+  user.cfg.entry_pause_reason = null;
     user.cfg.max_total_notional_usdt = Math.max(0, Number(user.cfg.max_total_notional_usdt ?? 0));
     if (!user.symbols.some((symbol) => symbol.symbol === BTC_SYMBOL)) {
       user.symbols.unshift(defaultSymbol(BTC_SYMBOL, true));
