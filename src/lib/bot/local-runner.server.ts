@@ -10,6 +10,7 @@ import {
   updateLocalSymbol,
 } from "@/lib/bot/local-bot-store.server";
 import { sendPushToUser } from "@/lib/bot/push.server";
+import { maybeAutoLearn } from "@/lib/bot/auto-learn.server";
 
 const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 10_000);
 const BTC_SYMBOL = "BTCUSDT";
@@ -188,6 +189,20 @@ export async function runLocalBotTick(userId: string) {
       ? Math.max(liveMinOrderUsdt, effectiveCapital)
       : Math.max(minOrderFloor, effectiveCapital / maxOpenTrades);
   const btcCfg = state.symbols.find((s) => s.symbol === BTC_SYMBOL);
+
+  // Improvise from closed orders: refresh the learned multipliers periodically
+  // (cheap on most ticks; only re-analyzes Binance fills every few minutes).
+  // The multipliers persist on the symbol config and are applied authoritatively
+  // inside normalizeUserStore so reads and writes stay consistent.
+  try {
+    await maybeAutoLearn(userId, creds, BTC_SYMBOL);
+  } catch (e) {
+    addLocalLog(userId, "warn", `Auto-learn skipped: ${(e as Error).message}`, BTC_SYMBOL, {
+      dedupeKey: "auto-learn-error",
+      dedupeWindowMs: 10 * 60 * 1000,
+    });
+  }
+
   updateLocalSymbol(userId, BTC_SYMBOL, {
     enabled: true,
     grid_levels: smallAccount ? 1 : paperHighRisk ? 3 : testnet ? BTC_GRID_LEVELS : 1,

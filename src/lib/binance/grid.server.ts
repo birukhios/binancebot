@@ -56,6 +56,7 @@ interface SymbolCfg {
   enabled: boolean;
   grid_levels: number;
   grid_spacing_pct: number;
+  take_profit_spacing_mult?: number | null;
   order_size_usdt: number;
   min_order_size_usdt?: number | null;
   max_order_size_usdt?: number | null;
@@ -103,8 +104,11 @@ function effectiveStopLossRoi(stopLossRoiPct: number | null | undefined) {
   return value < 0 ? value : DEFAULT_STOP_LOSS_ROI_PCT;
 }
 
-function effectiveTakeProfitSpacingPct(gridSpacingPct: number) {
-  return Math.max(0.1, Number(gridSpacingPct || 0) * TAKE_PROFIT_SPACING_MULT);
+function effectiveTakeProfitSpacingPct(gridSpacingPct: number, tpMult?: number | null) {
+  const mult = Number.isFinite(Number(tpMult)) && Number(tpMult) > 0
+    ? Number(tpMult)
+    : TAKE_PROFIT_SPACING_MULT;
+  return Math.max(0.1, Number(gridSpacingPct || 0) * mult);
 }
 
 function gridRepriceTolerancePct(gridSpacingPct: number) {
@@ -373,7 +377,7 @@ export async function maybeTakeProfit(
 
   // Round-trip taker fee buffer (~0.08%). Don't close until profit exceeds
   // both grid spacing AND fees, otherwise the market close eats the gain.
-  const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct);
+  const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct, cfg.take_profit_spacing_mult);
   const feeBufferUsdt = (notional * TAKE_PROFIT_FEE_BUFFER_PCT) / 100;
   const targetUsdt = notional * (tpSpacingPct / 100) + feeBufferUsdt;
   if (unrealized < targetUsdt) return false;
@@ -1091,7 +1095,7 @@ async function reconcileSymbolLocked(
   // That gives the bot a deterministic closing plan even if mark/center shifts
   // around after entry.
   if (positionAmt !== 0 && positionEntryPrice > 0) {
-      const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct);
+      const tpSpacingPct = effectiveTakeProfitSpacingPct(cfg.grid_spacing_pct, cfg.take_profit_spacing_mult);
       const closeQty = roundStep(Math.abs(positionAmt), f.stepSize, f.quantityPrecision);
       if (closeQty >= f.minQty) {
         const tpPx = roundStep(

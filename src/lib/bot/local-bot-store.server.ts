@@ -212,6 +212,27 @@ function normalizeUserStore(user: LocalUserStore) {
         : testnet
           ? Math.max(1, Math.min(2.5, Number(symbol.z_entry_threshold ?? 1.0)))
           : Math.max(1.2, Math.min(2.5, Number(symbol.z_entry_threshold ?? 1.4)));
+
+        // ---- Apply self-learned multipliers (improvised from closed orders) ----
+        // These are derived in auto-learn.server.ts and persist on the symbol.
+        // Applied here so normalize stays the single source of truth: the grid
+        // spacing, take-profit threshold, stop-loss and order size all adapt to
+        // recent realized performance without any runaway feedback.
+        const clampNum = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+        const spacingMult = clampNum(Number(symbol.learned_spacing_mult ?? 1) || 1, 0.7, 1.6);
+        const stopMult = clampNum(Number(symbol.learned_stop_mult ?? 1) || 1, 0.7, 1.3);
+        const sizeMult = clampNum(Number(symbol.learned_size_mult ?? 1) || 1, 0.5, 1.0);
+        symbol.grid_spacing_pct = clampNum(symbol.grid_spacing_pct * spacingMult, 0.08, 1.5);
+        symbol.stop_loss_roi_pct = clampNum(symbol.stop_loss_roi_pct * stopMult, -20, -3);
+        symbol.take_profit_spacing_mult = clampNum(
+          Number(symbol.take_profit_spacing_mult ?? 0.2) || 0.2,
+          0.12,
+          0.4,
+        );
+        symbol.order_size_usdt = Math.max(
+          Number(symbol.min_order_size_usdt ?? 0),
+          symbol.order_size_usdt * sizeMult,
+        );
     }
   }
 }
