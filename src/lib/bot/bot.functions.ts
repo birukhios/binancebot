@@ -654,6 +654,24 @@ export const setMaxExposure = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const setLeverage = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((d: { leverage: number }) =>
+    z.object({ leverage: z.number().int().min(1).max(25) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    if (!hasRemoteDb()) {
+      updateLocalBotConfig(context.userId, { target_leverage: data.leverage });
+      return { ok: true, leverage: data.leverage };
+    }
+
+    await remoteDb
+      .from("bot_config")
+      .update({ target_leverage: data.leverage })
+      .eq("user_id", context.userId);
+    return { ok: true, leverage: data.leverage };
+  });
+
 const intelligenceSchema = z.object({
   advisor_enabled: z.boolean().optional(),
   auto_select_enabled: z.boolean().optional(),

@@ -268,6 +268,7 @@ export function DashboardShell() {
                   applyHighRiskFn: mutations.applyHighRiskFn,
                   setIntelligenceFn: mutations.setIntelligenceFn,
                   maxExp: mutations.maxExp,
+                  setLev: mutations.setLev,
                   runAutoSelectFn: mutations.runAutoSelectFn,
                   saveCredsFn: mutations.saveCredsFn,
                   invalidate,

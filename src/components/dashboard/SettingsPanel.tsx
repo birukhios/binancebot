@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -7,6 +8,56 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { BinanceKeysCard } from "./BinanceKeysCard";
 import { BinanceNetworkCard } from "./BinanceNetworkCard";
+
+function LeverageControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (lev: number) => void | Promise<void>;
+}) {
+  const [lev, setLev] = useState(value);
+  useEffect(() => setLev(value), [value]);
+
+  // Mirrors the server-side math: stop fires at ~ -1% price move (-lev% ROI),
+  // and isolated-margin liquidation is near a -3.8% move (~-96% ROI).
+  const stopMovePct = 1.0;
+  const liqMovePct = 96 / lev;
+  const buffer = (liqMovePct / stopMovePct).toFixed(1);
+  const risky = lev >= 20;
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center justify-between">
+        <Label className="text-sm">Leverage</Label>
+        <Badge variant={risky ? "destructive" : "secondary"} className="font-mono">
+          {lev}x
+        </Badge>
+      </div>
+      <input
+        type="range"
+        min={1}
+        max={25}
+        step={1}
+        value={lev}
+        onChange={(e) => setLev(parseInt(e.target.value))}
+        onMouseUp={() => lev !== value && onChange(lev)}
+        onTouchEnd={() => lev !== value && onChange(lev)}
+        className="w-full accent-primary"
+      />
+      <div className="flex justify-between text-[10px] text-muted-foreground">
+        <span>1x (safe)</span>
+        <span>25x (max)</span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Applies to both LIVE and TESTNET. Stop-loss auto-scales to ~-{stopMovePct}% price
+        move (-{lev}% ROI); liquidation is near a -{liqMovePct.toFixed(1)}% move — a{" "}
+        <span className={risky ? "text-destructive font-medium" : "font-medium"}>{buffer}x</span>{" "}
+        safety buffer. Higher leverage = bigger positions and bigger swings.
+      </p>
+    </div>
+  );
+}
 
 export function SettingsPanel({
   cfg,
@@ -22,6 +73,7 @@ export function SettingsPanel({
     applyHighRiskFn: any;
     setIntelligenceFn: any;
     maxExp: any;
+    setLev: any;
     runAutoSelectFn: any;
     saveCredsFn: any;
     invalidate: () => void;
@@ -99,6 +151,15 @@ export function SettingsPanel({
               />
             </div>
           </div>
+
+          <LeverageControl
+            value={Number(cfg?.target_leverage ?? 25)}
+            onChange={async (lev) => {
+              await mutations.setLev({ data: { leverage: lev } });
+              toast.success(`Leverage set to ${lev}x`);
+              mutations.invalidate();
+            }}
+          />
         </CardContent>
       </Card>
 

@@ -8,6 +8,7 @@ import {
   setBotRunning,
   setTestnet,
   setMaxExposure,
+  setLeverage,
   updateSymbol,
   killSwitch,
   closePosition,
@@ -80,6 +81,7 @@ export function useDashboardMutations(sessionUserId: string | null) {
   const startStop = useServerFn(setBotRunning);
   const toggleTestnetFn = useServerFn(setTestnet);
   const maxExp = useServerFn(setMaxExposure);
+  const setLev = useServerFn(setLeverage);
   const updSym = useServerFn(updateSymbol);
   const kill = useServerFn(killSwitch);
   const closePos = useServerFn(closePosition);
@@ -162,6 +164,7 @@ export function useDashboardMutations(sessionUserId: string | null) {
     testConnMut,
     toggleEnvironment,
     maxExp,
+    setLev,
     updSym,
     closePos,
     cancelOrders,
