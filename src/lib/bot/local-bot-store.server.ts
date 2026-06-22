@@ -33,6 +33,14 @@ const BTC_GRID_LEVELS = 2;
 const BTC_LEVERAGE = 3;
 const BTC_FAST_SPACING_PCT = 0.35;
 const BTC_MIN_ORDER_USDT = 75;
+// Hard ceiling on leverage for safety. Stop-loss is scaled to leverage so the
+// position always exits well before the liquidation price.
+const MAX_LEVERAGE = 25;
+const DEFAULT_LEVERAGE = 25;
+// Adverse price move (%) at which the stop fires, used to derive the ROI stop
+// from leverage: stopRoi ≈ -STOP_PRICE_MOVE_PCT × leverage. At 25× this is a
+// −1% move → −25% ROI, vs liquidation near a −3.8% move (−96% ROI).
+const STOP_PRICE_MOVE_PCT = 1.0;
 export const PAPER_HIGH_RISK_PROFILE = "paper_high_risk";
 
 type LocalLogOptions = {
@@ -87,6 +95,7 @@ function defaultUserStore(): LocalUserStore {
       is_running: false,
       risk_profile: "standard",
       bot_capital_pct: 30,
+      target_leverage: DEFAULT_LEVERAGE,
       daily_profit_target_pct: 2,
       daily_loss_limit_pct: 3,
       max_open_trades: BTC_MAX_ENTRY_SLOTS,
@@ -137,6 +146,10 @@ function normalizeUserStore(user: LocalUserStore) {
   user.cfg.bot_capital_pct = paperHighRisk
     ? 40
     : Math.max(20, Math.min(40, Number(user.cfg.bot_capital_pct ?? 30)));
+  user.cfg.target_leverage = Math.max(
+    1,
+    Math.min(MAX_LEVERAGE, Math.floor(Number(user.cfg.target_leverage ?? DEFAULT_LEVERAGE))),
+  );
   user.cfg.daily_profit_target_pct = paperHighRisk
     ? 4
     : Math.max(0, Number(user.cfg.daily_profit_target_pct ?? 2));
@@ -197,12 +210,13 @@ function normalizeUserStore(user: LocalUserStore) {
         symbol.max_order_size_usdt = paperHighRisk
           ? Math.max(2000, Number(symbol.max_order_size_usdt ?? 0))
           : Math.max(testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt, Number(symbol.max_order_size_usdt ?? 0));
-        symbol.leverage = paperHighRisk ? 8 : testnet ? BTC_LEVERAGE : 2;
-      symbol.stop_loss_roi_pct = paperHighRisk
-        ? Math.max(-10, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -8)))
-        : testnet
-          ? Math.max(-20, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -12)))
-          : Math.max(-12, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -8)));
+        symbol.leverage = Math.max(
+          1,
+          Math.min(MAX_LEVERAGE, Math.floor(Number(user.cfg.target_leverage ?? DEFAULT_LEVERAGE))),
+        );
+        // Scale the ROI stop to leverage so the price-distance stop stays sane
+        // and always exits well before liquidation (e.g. −1% move at 25×).
+        symbol.stop_loss_roi_pct = -STOP_PRICE_MOVE_PCT * symbol.leverage;
       symbol.trend_filter_enabled = true;
       symbol.funding_filter_enabled = true;
       symbol.funding_max_abs_bps = paperHighRisk ? 10 : testnet ? Number(symbol.funding_max_abs_bps ?? 10) : 8;
@@ -223,7 +237,9 @@ function normalizeUserStore(user: LocalUserStore) {
         const stopMult = clampNum(Number(symbol.learned_stop_mult ?? 1) || 1, 0.7, 1.3);
         const sizeMult = clampNum(Number(symbol.learned_size_mult ?? 1) || 1, 0.5, 1.0);
         symbol.grid_spacing_pct = clampNum(symbol.grid_spacing_pct * spacingMult, 0.08, 1.5);
-        symbol.stop_loss_roi_pct = clampNum(symbol.stop_loss_roi_pct * stopMult, -20, -3);
+        // Allow leverage-scaled stops (−1% move × up to 25× → −25% ROI) while
+        // keeping a hard floor that still sits inside the liquidation threshold.
+        symbol.stop_loss_roi_pct = clampNum(symbol.stop_loss_roi_pct * stopMult, -70, -3);
         symbol.take_profit_spacing_mult = clampNum(
           Number(symbol.take_profit_spacing_mult ?? 0.2) || 0.2,
           0.12,

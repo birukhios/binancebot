@@ -57,6 +57,58 @@ function entryPauseUntilMs(value: unknown) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+// Once per bot-day, push a summary of the day that just ended: net realized
+// PnL, number of trades and win rate.
+async function sendDailySummaryIfDue(
+  userId: string,
+  creds: Awaited<ReturnType<typeof getCredsForUser>>,
+) {
+  const currentDayStart = botDayStartMs();
+  const lastSummaryDay = Number(getLocalBotState(userId).cfg.last_daily_summary_day ?? 0);
+  if (lastSummaryDay >= currentDayStart) return;
+
+  // First run: set the baseline without backfilling a noisy summary.
+  if (!lastSummaryDay) {
+    updateLocalBotConfig(userId, { last_daily_summary_day: currentDayStart });
+    return;
+  }
+
+  const windowStart = currentDayStart - 24 * 60 * 60 * 1000;
+  let income: any[] = [];
+  try {
+    income = await binance.income(creds, {
+      startTime: windowStart,
+      endTime: currentDayStart,
+      limit: 1000,
+    });
+  } catch {
+    return; // try again next tick; don't advance the marker on failure
+  }
+
+  const realized = income
+    .filter((r) => String(r.incomeType ?? "") === "REALIZED_PNL")
+    .map((r) => Number(r.income ?? 0));
+  const net = income.reduce((sum, r) => {
+    const type = String(r.incomeType ?? "");
+    if (!["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(type)) return sum;
+    return sum + Number(r.income ?? 0);
+  }, 0);
+
+  updateLocalBotConfig(userId, { last_daily_summary_day: currentDayStart });
+
+  if (realized.length === 0) return; // no trades that day — stay quiet
+
+  const wins = realized.filter((v) => v > 0).length;
+  const winRate = Math.round((wins / realized.length) * 100);
+  const sign = net >= 0 ? "+" : "";
+  const emoji = net >= 0 ? "🟢" : "🔴";
+  sendPushToUser(userId, {
+    title: `BKbot — Daily Summary ${emoji}`,
+    body: `${sign}${net.toFixed(2)} USDT · ${realized.length} trades · ${winRate}% win rate`,
+    tag: "daily-summary",
+  }).catch(() => {});
+}
+
 async function dailyPnl(
   userId: string,
   creds: Awaited<ReturnType<typeof getCredsForUser>>,
@@ -108,7 +160,12 @@ export async function runLocalBotTick(userId: string) {
       : botCapital
     : botCapital;
   const smallWallet = effectiveCapital < 50;
-  const leveragedCapital = smallWallet ? effectiveCapital * 10 : effectiveCapital;
+  // Leverage the bot trades at (configurable, capped at 25× by normalize).
+  const targetLeverage = Math.max(1, Math.min(25, Math.floor(Number(state.cfg.target_leverage ?? 25))));
+  // Small wallets get a leveraged notional budget so the higher leverage
+  // actually deploys a bigger position. Cap margin utilisation at ~50% so a
+  // fully-deployed grid still sits far inside the liquidation threshold.
+  const leveragedCapital = smallWallet ? effectiveCapital * targetLeverage * 0.5 : effectiveCapital;
   updateLocalBotConfig(userId, { max_total_notional_usdt: leveragedCapital });
   const paperHighRisk = state.cfg.risk_profile === PAPER_HIGH_RISK_PROFILE;
   if (paperHighRisk) {
@@ -162,6 +219,7 @@ export async function runLocalBotTick(userId: string) {
     (p: any) => String(p.symbol) === BTC_SYMBOL,
   );
   const openPositionSymbols = new Set(activeOpenPositions.map((p: any) => String(p.symbol)));
+  await sendDailySummaryIfDue(userId, creds).catch(() => {});
   const pnl = await dailyPnl(userId, creds, activeOpenPositions);
   const dailyTarget =
     effectiveCapital * (Math.max(0, Number(state.cfg.daily_profit_target_pct ?? 2)) / 100);
@@ -211,8 +269,10 @@ export async function runLocalBotTick(userId: string) {
     min_order_size_usdt: smallAccount ? liveMinOrderUsdt : minOrderFloor,
     max_order_size_usdt: Math.max(smallAccount ? liveMinOrderUsdt : minOrderFloor, btcOrderSize * 2),
     grid_spacing_pct: smallAccount ? 0.15 : paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5,
-    leverage: smallAccount ? 10 : paperHighRisk ? 8 : testnet ? BTC_LEVERAGE : 2,
-    stop_loss_roi_pct: Number(btcCfg?.stop_loss_roi_pct ?? (smallAccount ? -5 : paperHighRisk ? -6 : testnet ? -8 : -6)),
+    leverage: targetLeverage,
+    // Base stop scaled to leverage (≈ −1% price move). normalize re-derives this
+    // authoritatively; set here so the value is sane before normalization.
+    stop_loss_roi_pct: -1.0 * targetLeverage,
     trend_filter_enabled: smallAccount ? false : Boolean(btcCfg?.trend_filter_enabled ?? true),
     funding_filter_enabled: smallAccount ? false : Boolean(btcCfg?.funding_filter_enabled ?? true),
     funding_max_abs_bps: Number(btcCfg?.funding_max_abs_bps ?? (paperHighRisk ? 10 : testnet ? 10 : 8)),
