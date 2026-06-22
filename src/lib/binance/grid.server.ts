@@ -1291,7 +1291,7 @@ async function reconcileSymbolLocked(
       configuredMaxOrder,
       Math.max(minEntryNotional, remainingBudget / entryDesired.length),
     );
-    const sizedQty = roundStepUp(perEntryBudget / mark, f.stepSize, f.quantityPrecision);
+    const sizedQty = roundStep(perEntryBudget / mark, f.stepSize, f.quantityPrecision);
     const sizedNotional = sizedQty * mark;
 
     if (sizedQty < f.minQty || sizedNotional < minEntryNotional || sizedNotional < f.minNotional) {
